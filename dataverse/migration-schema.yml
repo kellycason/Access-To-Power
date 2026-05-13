@@ -1,0 +1,335 @@
+# Access-to-Power Dataverse Schema
+#
+# These tables are created in the customer's Dataverse environment ONCE
+# (during onboarding) under the `AccessToPower` publisher / solution.
+# Customer-migrated tables are created at runtime per migration job and are
+# NOT defined here.
+#
+# Publisher prefix: `acp` (Access-to-Power)
+# Solution unique name: `AccessToPower`
+
+publisher:
+  uniqueName: AccessToPowerPublisher
+  friendlyName: Access to Power Publisher
+  prefix: acp
+  optionValuePrefix: 75600
+
+solution:
+  uniqueName: AccessToPower
+  friendlyName: Access to Power
+  version: 1.0.0.0
+
+tables:
+  - schemaName: acp_migrationjob
+    displayName: Migration Job
+    displayCollectionName: Migration Jobs
+    description: One end-to-end Access-to-Dataverse migration run.
+    ownershipType: UserOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Name
+      maxLength: 200
+      isRequired: true
+    attributes:
+      - schemaName: acp_status
+        displayName: Status
+        type: Choice
+        options:
+          - { value: 1, label: Draft }
+          - { value: 2, label: Scanning }
+          - { value: 3, label: Mapping }
+          - { value: 4, label: Ready to Migrate }
+          - { value: 5, label: Creating Schema }
+          - { value: 6, label: Loading Data }
+          - { value: 7, label: Resolving Lookups }
+          - { value: 8, label: Validating }
+          - { value: 9, label: Succeeded }
+          - { value: 10, label: Partially Succeeded }
+          - { value: 11, label: Failed }
+          - { value: 12, label: Cancelled }
+      - schemaName: acp_sourcefilename
+        displayName: Source File Name
+        type: String
+        maxLength: 260
+      - schemaName: acp_sourcefilesize
+        displayName: Source File Size (bytes)
+        type: BigInt
+      - schemaName: acp_sourcesha256
+        displayName: Source SHA-256
+        type: String
+        maxLength: 64
+      - schemaName: acp_manifest
+        displayName: Manifest JSON
+        type: File
+        description: Raw AccessSchemaManifest emitted by the helper.
+      - schemaName: acp_plan
+        displayName: Migration Plan JSON
+        type: File
+        description: Frozen MigrationPlan including user mapping decisions.
+      - schemaName: acp_targetsolutionname
+        displayName: Target Solution Unique Name
+        type: String
+        maxLength: 100
+      - schemaName: acp_targetpublisherprefix
+        displayName: Target Publisher Prefix
+        type: String
+        maxLength: 8
+      - schemaName: acp_tablecount
+        displayName: Table Count
+        type: Integer
+      - schemaName: acp_rowcount
+        displayName: Row Count (Expected)
+        type: BigInt
+      - schemaName: acp_rowsmigrated
+        displayName: Rows Migrated
+        type: BigInt
+      - schemaName: acp_issuescount
+        displayName: Issues Count
+        type: Integer
+      - schemaName: acp_startedon
+        displayName: Started On
+        type: DateTime
+      - schemaName: acp_completedon
+        displayName: Completed On
+        type: DateTime
+
+  - schemaName: acp_migrationtable
+    displayName: Migration Table
+    displayCollectionName: Migration Tables
+    description: One Access table being migrated under a job.
+    ownershipType: UserOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Name
+      maxLength: 200
+      isRequired: true
+    attributes:
+      - schemaName: acp_jobid
+        displayName: Migration Job
+        type: Lookup
+        target: acp_migrationjob
+        isRequired: true
+      - schemaName: acp_accesstablename
+        displayName: Access Table Name
+        type: String
+        maxLength: 128
+        isRequired: true
+      - schemaName: acp_dataverseschemaname
+        displayName: Dataverse Schema Name
+        type: String
+        maxLength: 128
+      - schemaName: acp_action
+        displayName: Action
+        type: Choice
+        options:
+          - { value: 1, label: Migrate }
+          - { value: 2, label: Skip }
+      - schemaName: acp_status
+        displayName: Status
+        type: Choice
+        options:
+          - { value: 1, label: Pending }
+          - { value: 2, label: Schema Created }
+          - { value: 3, label: Loading }
+          - { value: 4, label: Loaded }
+          - { value: 5, label: Lookups Resolved }
+          - { value: 6, label: Validated }
+          - { value: 7, label: Skipped }
+          - { value: 8, label: Failed }
+      - schemaName: acp_rowsexpected
+        displayName: Rows Expected
+        type: BigInt
+      - schemaName: acp_rowsloaded
+        displayName: Rows Loaded
+        type: BigInt
+      - schemaName: acp_rowsfailed
+        displayName: Rows Failed
+        type: BigInt
+      - schemaName: acp_idmap
+        displayName: ID Map (Access PK → Dataverse GUID)
+        type: File
+        description: NDJSON map used to resolve lookups in pass 2.
+
+  - schemaName: acp_migrationcolumn
+    displayName: Migration Column
+    displayCollectionName: Migration Columns
+    description: One Access column mapping decision under a migration table.
+    ownershipType: UserOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Name
+      maxLength: 200
+      isRequired: true
+    attributes:
+      - schemaName: acp_tableid
+        displayName: Migration Table
+        type: Lookup
+        target: acp_migrationtable
+        isRequired: true
+      - schemaName: acp_accesscolumnname
+        displayName: Access Column Name
+        type: String
+        maxLength: 128
+      - schemaName: acp_accessdatatype
+        displayName: Access Data Type
+        type: String
+        maxLength: 32
+      - schemaName: acp_dataverseschemaname
+        displayName: Dataverse Schema Name
+        type: String
+        maxLength: 128
+      - schemaName: acp_dataversetype
+        displayName: Dataverse Type
+        type: String
+        maxLength: 32
+      - schemaName: acp_action
+        displayName: Action
+        type: Choice
+        options:
+          - { value: 1, label: Map }
+          - { value: 2, label: Skip }
+      - schemaName: acp_isprimarykey
+        displayName: Is Primary Key
+        type: Boolean
+      - schemaName: acp_isalternatekey
+        displayName: Is Alternate Key
+        type: Boolean
+      - schemaName: acp_isrequired
+        displayName: Is Required
+        type: Boolean
+      - schemaName: acp_maxlength
+        displayName: Max Length
+        type: Integer
+      - schemaName: acp_precision
+        displayName: Precision
+        type: Integer
+      - schemaName: acp_lookuptarget
+        displayName: Lookup Target
+        type: String
+        maxLength: 128
+
+  - schemaName: acp_fieldmappingdecision
+    displayName: Field Mapping Decision
+    displayCollectionName: Field Mapping Decisions
+    description: |
+      Persisted history of user decisions per (Access type → Dataverse type) so
+      future migrations can suggest defaults.
+    ownershipType: OrganizationOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Name
+      maxLength: 200
+      isRequired: true
+    attributes:
+      - schemaName: acp_accessdatatype
+        displayName: Access Data Type
+        type: String
+        maxLength: 32
+      - schemaName: acp_recommendeddataversetype
+        displayName: Recommended Dataverse Type
+        type: String
+        maxLength: 32
+      - schemaName: acp_notes
+        displayName: Notes
+        type: Memo
+
+  - schemaName: acp_migrationissue
+    displayName: Migration Issue
+    displayCollectionName: Migration Issues
+    description: Remediation item discovered during scan / load / validate.
+    ownershipType: UserOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Summary
+      maxLength: 400
+      isRequired: true
+    attributes:
+      - schemaName: acp_jobid
+        displayName: Migration Job
+        type: Lookup
+        target: acp_migrationjob
+        isRequired: true
+      - schemaName: acp_severity
+        displayName: Severity
+        type: Choice
+        options:
+          - { value: 1, label: Info }
+          - { value: 2, label: Warning }
+          - { value: 3, label: Error }
+      - schemaName: acp_category
+        displayName: Category
+        type: String
+        maxLength: 64
+      - schemaName: acp_table
+        displayName: Table
+        type: String
+        maxLength: 128
+      - schemaName: acp_column
+        displayName: Column
+        type: String
+        maxLength: 128
+      - schemaName: acp_rowordinal
+        displayName: Row Ordinal
+        type: BigInt
+      - schemaName: acp_message
+        displayName: Message
+        type: Memo
+
+  - schemaName: acp_migrationlog
+    displayName: Migration Log
+    displayCollectionName: Migration Logs
+    description: Time-ordered execution log for a migration job (debug trail).
+    ownershipType: UserOwned
+    primaryNameAttribute:
+      schemaName: acp_name
+      displayName: Message
+      maxLength: 400
+      isRequired: true
+    attributes:
+      - schemaName: acp_jobid
+        displayName: Migration Job
+        type: Lookup
+        target: acp_migrationjob
+        isRequired: true
+      - schemaName: acp_level
+        displayName: Level
+        type: Choice
+        options:
+          - { value: 1, label: Debug }
+          - { value: 2, label: Info }
+          - { value: 3, label: Warn }
+          - { value: 4, label: Error }
+      - schemaName: acp_source
+        displayName: Source
+        type: String
+        maxLength: 64
+      - schemaName: acp_details
+        displayName: Details
+        type: Memo
+
+# Cloud flows (Power Automate) that operate on these tables:
+flows:
+  - name: CreateDataverseSchema
+    trigger: WhenJobStatusChangesTo_CreatingSchema
+    purpose: |
+      Read acp_plan, create the customer's target tables/columns/relationships
+      via Web API EntityDefinitions endpoints, call PublishAllXml when done,
+      then set status to LoadingData.
+  - name: LoadDataverseData
+    trigger: WhenJobStatusChangesTo_LoadingData
+    purpose: |
+      Stream NDJSON rows out of acp_manifest's row files, write rows in
+      throttle-aware batches, populate acp_migrationtable.acp_idmap, then
+      set status to ResolvingLookups.
+  - name: ResolveLookups
+    trigger: WhenJobStatusChangesTo_ResolvingLookups
+    purpose: |
+      For each lookup field, patch rows with @odata.bind references using
+      the persisted Access-PK → Dataverse-GUID id map, then set status to
+      Validating.
+  - name: ValidateMigration
+    trigger: WhenJobStatusChangesTo_Validating
+    purpose: |
+      Re-count rows, compare against acp_rowsexpected, write summary
+      migration issues, and set final status (Succeeded / PartiallySucceeded
+      / Failed).

@@ -1,0 +1,30 @@
+{
+  "name": "access-to-power",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Power Apps Code App that migrates Microsoft Access databases to Dataverse.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "lint": "tsc -b --noEmit",
+    "power:init": "power-apps code init",
+    "power:run": "power-apps code run",
+    "power:push": "power-apps code push"
+  },
+  "dependencies": {
+    "@fluentui/react-components": "^9.54.0",
+    "@fluentui/react-icons": "^2.0.260",
+    "@microsoft/power-apps": "^1.0.4",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}

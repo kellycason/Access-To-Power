@@ -1,0 +1,55 @@
+{
+  "manifestVersion": "1.0",
+  "migrationJobId": "00000000-0000-0000-0000-000000000001",
+  "jobName": "Northwind (demo)",
+  "sourcePath": "C:\\Users\\demo\\Documents\\Northwind.accdb",
+  "sourceSize": 6291456,
+  "sourceSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "capturedAt": "2024-01-01T00:00:00Z",
+  "emittedBy": "Mock",
+  "emitterVersion": "0.0.1",
+  "tables": [
+    {
+      "name": "Customers",
+      "rowCount": 91,
+      "rowsFile": "Customers.ndjson",
+      "columns": [
+        { "name": "CustomerID", "dataType": "Text", "maxLength": 5, "isPrimaryKey": true, "isRequired": true, "isAutoNumber": false },
+        { "name": "CompanyName", "dataType": "Text", "maxLength": 40, "isPrimaryKey": false, "isRequired": true, "isAutoNumber": false },
+        { "name": "ContactName", "dataType": "Text", "maxLength": 30, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "ContactTitle", "dataType": "Text", "maxLength": 30, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "City", "dataType": "Text", "maxLength": 15, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "Country", "dataType": "Text", "maxLength": 15, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "Picture", "dataType": "OleObject", "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false,
+          "issues": [{ "severity": "Warning", "category": "UnsupportedType", "message": "OLE Object columns cannot be migrated.", "column": "Picture" }]
+        }
+      ]
+    },
+    {
+      "name": "Orders",
+      "rowCount": 830,
+      "rowsFile": "Orders.ndjson",
+      "columns": [
+        { "name": "OrderID", "dataType": "AutoNumber", "isPrimaryKey": true, "isRequired": true, "isAutoNumber": true },
+        { "name": "CustomerID", "dataType": "Text", "maxLength": 5, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "OrderDate", "dataType": "DateTime", "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false },
+        { "name": "Freight", "dataType": "Currency", "precision": 10, "scale": 4, "isPrimaryKey": false, "isRequired": false, "isAutoNumber": false }
+      ]
+    }
+  ],
+  "relationships": [
+    {
+      "name": "Customers_Orders",
+      "parentTable": "Customers",
+      "parentColumns": ["CustomerID"],
+      "childTable": "Orders",
+      "childColumns": ["CustomerID"],
+      "enforceReferentialIntegrity": true,
+      "cascadeUpdate": false,
+      "cascadeDelete": false
+    }
+  ],
+  "issues": [
+    { "severity": "Warning", "category": "UnsupportedType", "message": "1 OLE Object column will be skipped.", "table": "Customers", "column": "Picture" }
+  ]
+}
