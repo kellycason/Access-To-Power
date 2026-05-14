@@ -9,9 +9,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "lint": "tsc -b --noEmit",
-    "power:init": "power-apps code init",
-    "power:run": "power-apps code run",
-    "power:push": "power-apps code push"
+    "power:init": "power-apps init",
+    "power:run": "power-apps run",
+    "power:push": "power-apps push"
   },
   "dependencies": {
     "@fluentui/react-components": "^9.54.0",
