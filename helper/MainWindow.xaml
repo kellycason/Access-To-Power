@@ -1,0 +1,39 @@
+<Window x:Class="AccessToPower.Helper.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Access to Power Helper"
+        Width="560" Height="420"
+        WindowStartupLocation="CenterScreen"
+        ResizeMode="CanMinimize">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <TextBlock Grid.Row="0" FontSize="18" FontWeight="SemiBold" Text="Access to Power Helper"/>
+        <TextBlock Grid.Row="1" Margin="0,4,0,12" TextWrapping="Wrap"
+                   Text="Reads schema and rows from a Microsoft Access database (.accdb / .mdb) and uploads them to your Dataverse environment. The file is opened read-only; macros and VBA are never executed."/>
+
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,0,0,12">
+            <TextBlock Text="Job: " VerticalAlignment="Center" FontWeight="SemiBold"/>
+            <TextBlock x:Name="JobNameText" VerticalAlignment="Center"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="3">
+            <Button x:Name="PickButton" Content="Choose Access database…" Padding="12,6" HorizontalAlignment="Left" Click="OnPickClicked"/>
+            <TextBlock x:Name="FilePathText" Margin="0,8,0,12" Foreground="Gray" TextWrapping="Wrap"/>
+
+            <ProgressBar x:Name="Progress" Height="6" IsIndeterminate="False" Minimum="0" Maximum="100" Value="0"/>
+            <TextBlock x:Name="StatusText" Margin="0,8,0,0" TextWrapping="Wrap"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="4" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
+            <Button x:Name="StartButton" Content="Start upload" Padding="12,6" IsEnabled="False" Click="OnStartClicked"/>
+            <Button x:Name="CloseButton" Content="Close" Padding="12,6" Margin="8,0,0,0" Click="OnCloseClicked"/>
+        </StackPanel>
+    </Grid>
+</Window>

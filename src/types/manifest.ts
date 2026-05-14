@@ -151,6 +151,8 @@ export interface FieldMapping {
   accessColumn: string;
   /** Skip = don't migrate this column at all. */
   action: "Map" | "Skip";
+  /** New = create/use a generated column; Existing = bind to an existing Dataverse column. */
+  targetMode?: "new" | "existing";
   dataverseSchemaName: string;
   dataverseDisplayName: string;
   dataverseType: DataverseAttributeType;
@@ -169,9 +171,12 @@ export interface FieldMapping {
 export interface TableMapping {
   accessTable: string;
   action: "Migrate" | "Skip";
+  /** New = create a table; Existing = load into an existing Dataverse table. */
+  targetMode?: "new" | "existing";
   dataverseSchemaName: string;
   dataverseDisplayName: string;
   dataversePluralName: string;
+  dataverseEntitySetName?: string;
   /** Primary name column for the Dataverse table. */
   primaryNameAccessColumn?: string;
   fields: FieldMapping[];

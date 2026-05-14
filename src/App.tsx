@@ -14,6 +14,7 @@ import { MigrateStep } from "./steps/MigrateStep";
 import { ValidateStep } from "./steps/ValidateStep";
 import { WizardNav } from "./components/WizardNav";
 import type { AccessSchemaManifest, MigrationPlan } from "./types/manifest";
+import type { ValidationReport } from "./services/validator";
 
 export type WizardStep = "connect" | "scan" | "map" | "migrate" | "validate";
 
@@ -57,6 +58,7 @@ export function App() {
   const [manifest, setManifest] = useState<AccessSchemaManifest | null>(null);
   const [plan, setPlan] = useState<MigrationPlan | null>(null);
   const [migrationJobId, setMigrationJobId] = useState<string | null>(null);
+  const [validationReport, setValidationReport] = useState<ValidationReport | null>(null);
 
   const currentIndex = useMemo(() => STEPS.indexOf(step), [step]);
 
@@ -118,13 +120,17 @@ export function App() {
             <MigrateStep
               plan={plan}
               migrationJobId={migrationJobId}
-              onCompleted={goNext}
+              onCompleted={(report) => {
+                setValidationReport(report);
+                goNext();
+              }}
               onBack={goPrev}
             />
           )}
           {step === "validate" && (
             <ValidateStep
               migrationJobId={migrationJobId}
+              report={validationReport}
               onBack={goPrev}
               onRestart={() => {
                 setStep("connect");
@@ -132,6 +138,7 @@ export function App() {
                 setPlan(null);
                 setMigrationJobId(null);
                 setJobName("");
+                setValidationReport(null);
               }}
             />
           )}

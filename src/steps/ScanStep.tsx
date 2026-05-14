@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Button,
   Body1,
@@ -14,12 +14,13 @@ import {
   TableRow,
   makeStyles,
 } from "@fluentui/react-components";
-import { MockManifestSource } from "../services/manifestSource";
+import { getDataverseClient } from "../services/dataverseClient";
 import type { AccessSchemaManifest } from "../types/manifest";
 
 const useStyles = makeStyles({
   page: { display: "flex", flexDirection: "column", gap: "16px" },
   actions: { display: "flex", gap: "8px", justifyContent: "space-between" },
+  rightGroup: { display: "flex", gap: "8px" },
 });
 
 interface Props {
@@ -28,30 +29,82 @@ interface Props {
   onBack: () => void;
 }
 
-/**
- * Step 2 — Scan.
- *
- * The Code App polls Dataverse for the manifest file column on
- * acp_migrationjob. For local dev, MockManifestSource serves a fixture from
- * /fixtures so the UI is fully usable before the helper exists.
- */
+const POLL_INTERVAL_MS = 4000;
+
 export function ScanStep({ migrationJobId, onManifestReady, onBack }: Props) {
   const styles = useStyles();
-  const [busy, setBusy] = useState(false);
   const [manifest, setManifest] = useState<AccessSchemaManifest | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [polling, setPolling] = useState(false);
+  const [helperLaunched, setHelperLaunched] = useState(false);
+  const pollTimer = useRef<number | null>(null);
 
-  async function loadMock() {
-    setBusy(true);
+  useEffect(() => {
+    return () => {
+      if (pollTimer.current) window.clearInterval(pollTimer.current);
+    };
+  }, []);
+
+  async function launchHelper() {
+    if (!migrationJobId) return;
     setError(null);
     try {
-      const source = new MockManifestSource();
-      const m = await source.load();
-      setManifest(m);
+      const client = getDataverseClient();
+      const { environmentUrl, tenantId } = await client.getContext();
+      const jobSnap = await client.getJob(migrationJobId);
+      const url = new URL("accesstopower://launch");
+      url.searchParams.set("jobId", migrationJobId);
+      url.searchParams.set("env", environmentUrl);
+      url.searchParams.set("tenant", tenantId);
+      url.searchParams.set("name", jobSnap.name);
+      window.location.href = url.toString();
+      setHelperLaunched(true);
+      startPolling();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
+    }
+  }
+
+  function startPolling() {
+    if (pollTimer.current || !migrationJobId) return;
+    setPolling(true);
+    pollTimer.current = window.setInterval(async () => {
+      try {
+        const client = getDataverseClient();
+        const m = await client.tryGetManifest(migrationJobId);
+        if (m) {
+          if (pollTimer.current) window.clearInterval(pollTimer.current);
+          pollTimer.current = null;
+          setManifest(m);
+          setPolling(false);
+        }
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e));
+        if (pollTimer.current) window.clearInterval(pollTimer.current);
+        pollTimer.current = null;
+        setPolling(false);
+      }
+    }, POLL_INTERVAL_MS);
+  }
+
+  async function checkNow() {
+    if (!migrationJobId) return;
+    setError(null);
+    try {
+      const client = getDataverseClient();
+      const m = await client.tryGetManifest(migrationJobId);
+      if (m) {
+        if (pollTimer.current) {
+          window.clearInterval(pollTimer.current);
+          pollTimer.current = null;
+        }
+        setPolling(false);
+        setManifest(m);
+      } else {
+        startPolling();
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   }
 
@@ -61,27 +114,32 @@ export function ScanStep({ migrationJobId, onManifestReady, onBack }: Props) {
       <Body1>
         Job: <code>{migrationJobId ?? "(none)"}</code>
       </Body1>
-      {!manifest && !busy && (
+
+      {!manifest && !helperLaunched && (
         <MessageBar intent="info">
           <MessageBarBody>
-            Waiting for the local helper to upload its manifest. For local
-            development, load the bundled Northwind fixture.
+            Launch the local helper to open your <code>.accdb</code> file and
+            upload its schema and data to Dataverse.
           </MessageBarBody>
         </MessageBar>
       )}
-      {busy && <Spinner label="Loading manifest…" />}
+
+      {polling && !manifest && (
+        <Spinner label="Waiting for the helper to finish uploading…" />
+      )}
+
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
         </MessageBar>
       )}
+
       {manifest && (
         <>
           <Body1>
             Found <strong>{manifest.tables.length}</strong> tables /{" "}
             <strong>{manifest.tables.reduce((s, t) => s + t.rowCount, 0)}</strong>{" "}
-            rows / <strong>{manifest.relationships.length}</strong>{" "}
-            relationships.
+            rows / <strong>{manifest.relationships.length}</strong> relationships.
           </Body1>
           <Table size="small">
             <TableHeader>
@@ -111,12 +169,24 @@ export function ScanStep({ migrationJobId, onManifestReady, onBack }: Props) {
           </Table>
         </>
       )}
+
       <div className={styles.actions}>
         <Button onClick={onBack}>Back</Button>
-        <div style={{ display: "flex", gap: 8 }}>
-          <Button onClick={loadMock} disabled={busy}>
-            Load mock manifest
-          </Button>
+        <div className={styles.rightGroup}>
+          {!manifest && (
+            <>
+              <Button
+                appearance={helperLaunched ? "secondary" : "primary"}
+                onClick={launchHelper}
+                disabled={!migrationJobId}
+              >
+                {helperLaunched ? "Re-launch helper" : "Launch helper"}
+              </Button>
+              <Button onClick={checkNow} disabled={!migrationJobId}>
+                Check now
+              </Button>
+            </>
+          )}
           <Button
             appearance="primary"
             disabled={!manifest}

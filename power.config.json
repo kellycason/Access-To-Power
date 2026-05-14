@@ -2,8 +2,8 @@
   "$schema": "https://aka.ms/power-apps-code-config-schema",
   "appName": "Access to Power",
   "appDescription": "Migrate Microsoft Access databases to Microsoft Dataverse.",
-  "region": "unitedstates",
-  "environmentId": "TODO_SET_ENVIRONMENT_ID",
+  "region": "gccmoderate",
+  "environmentId": "ef140c1c-d9e0-e9ce-afc6-dc71efa8d691",
   "appId": "TODO_GENERATED_ON_FIRST_PUSH",
   "buildOutput": "dist",
   "entry": "index.html"

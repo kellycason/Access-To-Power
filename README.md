@@ -125,11 +125,16 @@ Edit `power.config.json` to point at your environment:
 - [x] Manifest contract (`src/types/manifest.ts`)
 - [x] Dataverse migration schema spec (`dataverse/migration-schema.yml`)
 - [x] Mock manifest loader for local dev
-- [ ] Power Apps SDK wiring (replace mock Dataverse calls in steps)
-- [ ] Provisioning script for `acp_*` tables + four cloud flows
-- [ ] PAD helper flow (manifest + NDJSON contract)
-- [ ] Signed .NET tray helper with `accesstopower://` protocol handler
+- [x] Publisher + solution provisioning (`dataverse/01_create_publisher_and_solution.ps1`)
+- [x] `acp_*` table provisioning (`dataverse/02_create_tables.ps1`)
+- [x] Signed .NET helper (`helper/`) — MSAL+WAM, ACE OLEDB read-only, NDJSON streaming, protocol handler
+- [x] Connect step: real `acp_migrationjob` creation via Dataverse Web API
+- [x] Scan step: launches `accesstopower://` and polls for the uploaded manifest
+- [ ] Power Apps SDK wiring (replace direct Web API fetch with `@microsoft/power-apps` data client)
+- [ ] CreateDataverseSchema cloud flow
+- [ ] LoadDataverseData cloud flow
+- [ ] ResolveLookups cloud flow
+- [ ] ValidateMigration cloud flow
+- [ ] PAD helper flow (alternate to .NET helper)
 - [ ] Throttle-aware bulk upsert client (respects `Retry-After`)
-- [ ] Two-pass lookup resolver
-- [ ] Validation pass: row-count + checksum + foreign-key integrity
 - [ ] Remediation report PDF export

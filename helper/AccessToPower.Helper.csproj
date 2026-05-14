@@ -1,0 +1,36 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>AccessToPowerHelper</AssemblyName>
+    <RootNamespace>AccessToPower.Helper</RootNamespace>
+    <ApplicationIcon></ApplicationIcon>
+    <Version>0.1.0</Version>
+    <FileVersion>0.1.0.0</FileVersion>
+    <Company>Access to Power</Company>
+    <Product>Access to Power Helper</Product>
+    <Description>Reads Microsoft Access databases and uploads schema + data to Dataverse for migration.</Description>
+    <!-- Security: enable all analyzers, treat warnings as errors -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <!-- Single-file publish ready -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>false</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- ACE OLEDB requires platform=x64 to match the 64-bit Access Database Engine runtime -->
+    <PackageReference Include="System.Data.OleDb" Version="10.0.0" />
+    <!-- MSAL with Windows broker (WAM) for secure interactive auth -->
+    <PackageReference Include="Microsoft.Identity.Client" Version="4.66.2" />
+    <PackageReference Include="Microsoft.Identity.Client.Broker" Version="4.66.2" />
+  </ItemGroup>
+
+</Project>

@@ -26,6 +26,8 @@ yarn-debug.log*
 yarn-error.log*
 
 # Helper outputs
+helper/bin/
+helper/obj/
 helper/output/
 fixtures/local/
 *.accdb.manifest.json
