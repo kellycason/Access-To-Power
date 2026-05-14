@@ -1,7 +1,7 @@
 {
   "$schema": "https://aka.ms/power-apps-code-config-schema",
   "version": "1.0",
-  "appId": null,
+  "appId": "10203457-bc19-4b92-ab26-aaf4f665369a",
   "appDisplayName": "Access to Power",
   "description": "Migrate Microsoft Access databases to Microsoft Dataverse.",
   "region": "gccmoderate",
