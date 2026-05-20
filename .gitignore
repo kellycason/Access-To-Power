@@ -32,3 +32,10 @@ helper/output/
 fixtures/local/
 *.accdb.manifest.json
 *.accdb.ndjson
+
+# Local debug / scratch artifacts
+/inspect.ps1
+/query_*.ps1
+/migration_output.txt
+scripts/_*.out
+scripts/_*.txt

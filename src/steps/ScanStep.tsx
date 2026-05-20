@@ -152,10 +152,18 @@ export function ScanStep({ migrationJobId, onManifestReady, onBack }: Props) {
             </TableHeader>
             <TableBody>
               {manifest.tables.map((t) => {
-                const issues = t.columns.reduce(
-                  (n, c) => n + (c.issues?.length ?? 0),
-                  t.issues?.length ?? 0,
-                );
+                // Only count Warning/Error in the headline number — Info
+                // items (e.g. DateOnly detection) are informational and
+                // shouldn't look like problems.
+                const isProblem = (sev?: string) =>
+                  (sev ?? "").toLowerCase() !== "info";
+                const issues =
+                  (t.issues?.filter((i) => isProblem(i.severity)).length ?? 0) +
+                  t.columns.reduce(
+                    (n, c) =>
+                      n + (c.issues?.filter((i) => isProblem(i.severity)).length ?? 0),
+                    0,
+                  );
                 return (
                   <TableRow key={t.name}>
                     <TableCell>{t.name}</TableCell>

@@ -101,7 +101,16 @@ export async function createDataverseSchema(opts: CreateOptions): Promise<void> 
   for (const t of migrateTables) {
     opts.signal?.throwIfAborted();
     if (t.targetMode === "existing") {
-      log({ kind: "log", message: `Skipping column creation for existing table ${t.dataverseSchemaName}.` });
+      // For existing tables we only create columns that were explicitly marked targetMode === "new".
+      const newFields = t.fields.filter((f) => f.action === "Map" && f.targetMode === "new" && f.dataverseType !== "Lookup");
+      if (newFields.length === 0) {
+        log({ kind: "log", message: `Using existing columns on ${t.dataverseSchemaName}.` });
+        continue;
+      }
+      log({ kind: "log", message: `Adding ${newFields.length} new column(s) to existing table ${t.dataverseSchemaName}…` });
+      for (const f of newFields) {
+        await createAttributeIfMissing(envUrl, headers, t.dataverseSchemaName, f, opts.signal, log);
+      }
       continue;
     }
     for (const f of t.fields) {

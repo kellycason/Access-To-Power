@@ -48,6 +48,18 @@ export interface AccessColumn {
   defaultValue?: string;
   /** Column description from Access, if any. */
   description?: string;
+  /**
+   * True when scan-phase row sampling found every value at midnight, meaning
+   * the column is logically date-only (no clock component). Drives a Dataverse
+   * DateOnly attribute instead of DateAndTime. Permanent at create time.
+   */
+  detectedDateOnly?: boolean;
+  /**
+   * Max number of decimal digits observed in scan-phase samples for Single /
+   * Double / Decimal columns. Used to decide whether Single/Double should be
+   * promoted to Dataverse Decimal (precision &gt; 5) for fidelity.
+   */
+  detectedMaxDecimals?: number;
   /** Issues the helper found while reading this column. */
   issues?: ManifestIssue[];
 }
@@ -93,6 +105,12 @@ export type ManifestIssueCategory =
   | "Renamed"
   | "DataValidation"
   | "MissingPrimaryKey"
+  | "CompositePrimaryKey"
+  | "TextPrimaryKey"
+  | "LinkedTable"
+  | "DateOnly"
+  | "FloatPrecisionLoss"
+  | "SamplingSkipped"
   | "Other";
 
 export interface ManifestIssue {
@@ -141,6 +159,7 @@ export type DataverseAttributeType =
   | "Money"
   | "Double"
   | "DateTime"
+  | "DateOnly"
   | "Boolean"
   | "Uniqueidentifier"
   | "Lookup"

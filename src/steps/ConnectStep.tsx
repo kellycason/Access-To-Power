@@ -1,10 +1,14 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Button,
   Card,
   CardHeader,
+  Dropdown,
   Field,
   Input,
+  Option,
+  Radio,
+  RadioGroup,
   Title3,
   Body1,
   MessageBar,
@@ -12,13 +16,21 @@ import {
   Spinner,
   makeStyles,
 } from "@fluentui/react-components";
-import { getDataverseClient } from "../services/dataverseClient";
+import { getDataverseClient, type SolutionOption } from "../services/dataverseClient";
 
 const useStyles = makeStyles({
   page: { display: "flex", flexDirection: "column", gap: "16px", maxWidth: "720px" },
   card: { padding: "16px", display: "flex", flexDirection: "column", gap: "12px" },
   actions: { display: "flex", gap: "8px", justifyContent: "flex-end" },
   hint: { color: "var(--colorNeutralForeground3)", fontSize: "12px" },
+  twoCol: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" },
+  loadingLine: {
+    display: "flex",
+    alignItems: "center",
+    gap: "8px",
+    color: "var(--colorNeutralForeground3)",
+    fontSize: "12px",
+  },
 });
 
 interface Props {
@@ -29,25 +41,79 @@ interface Props {
 
 const PUB_PREFIX_RE = /^[a-z][a-z0-9]{1,7}$/;
 const SOL_NAME_RE = /^[A-Za-z][A-Za-z0-9]+$/;
+type SolutionMode = "new" | "existing";
 
 export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
   const styles = useStyles();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [solutionsError, setSolutionsError] = useState<string | null>(null);
+  const [solutionsLoading, setSolutionsLoading] = useState(false);
+  const [solutions, setSolutions] = useState<SolutionOption[]>([]);
 
+  const [solutionMode, setSolutionMode] = useState<SolutionMode>("new");
   const [publisherPrefix, setPublisherPrefix] = useState("");
   const [solutionName, setSolutionName] = useState("");
+  const [selectedSolutionUniqueName, setSelectedSolutionUniqueName] = useState("");
+
+  useEffect(() => {
+    let cancelled = false;
+    setSolutionsLoading(true);
+    setSolutionsError(null);
+    getDataverseClient().listSolutions()
+      .then((items) => {
+        if (cancelled) return;
+        setSolutions(items);
+        setSelectedSolutionUniqueName((current) => current || items[0]?.uniqueName || "");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setSolutionsError(e instanceof Error ? e.message : String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setSolutionsLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, []);
+
+  const selectedSolution = useMemo(
+    () => solutions.find((solution) => solution.uniqueName === selectedSolutionUniqueName) ?? null,
+    [selectedSolutionUniqueName, solutions],
+  );
+
+  const derivedNewSolution = solutionName.trim() || sanitizeSolutionName(jobName);
+  const derivedNewPrefix = publisherPrefix.trim() || sanitizePrefix(jobName);
+  const duplicateSolution = solutionMode === "new" && derivedNewSolution
+    ? solutions.find((solution) => solution.uniqueName.toLowerCase() === derivedNewSolution.toLowerCase()) ?? null
+    : null;
+
+  // Conflict check: if the typed prefix already belongs to a different
+  // publisher (different solution mapping), Dataverse will reject creating
+  // a second publisher with the same `customizationprefix`. Catch that here
+  // (guide Part 5) instead of letting the helper fail mid-schema-phase.
+  const conflictingPrefix = solutionMode === "new" && derivedNewPrefix
+    ? solutions.find((s) => s.publisherPrefix.toLowerCase() === derivedNewPrefix.toLowerCase()) ?? null
+    : null;
 
   const prefixError =
-    publisherPrefix && !PUB_PREFIX_RE.test(publisherPrefix)
+    solutionMode === "new" && publisherPrefix && !PUB_PREFIX_RE.test(publisherPrefix)
       ? "Use 2-8 lowercase letters/digits, starting with a letter."
-      : null;
+      : solutionMode === "new" && conflictingPrefix
+        ? `Prefix '${derivedNewPrefix}' is already used by publisher of solution '${conflictingPrefix.friendlyName}'. Pick a different prefix or use that existing solution.`
+        : null;
   const solError =
-    solutionName && !SOL_NAME_RE.test(solutionName)
+    solutionMode === "new" && solutionName && !SOL_NAME_RE.test(solutionName)
       ? "Use letters and digits only; start with a letter."
       : null;
 
-  const canSubmit = jobName.trim() && !prefixError && !solError && !busy;
+  const canSubmit = Boolean(
+    jobName.trim() &&
+    !prefixError &&
+    !solError &&
+    !duplicateSolution &&
+    !busy &&
+    (solutionMode === "new" ? derivedNewSolution && derivedNewPrefix : selectedSolution),
+  );
 
   async function createJob() {
     setBusy(true);
@@ -55,13 +121,21 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
     try {
       const client = getDataverseClient();
       const trimmedName = jobName.trim();
-      const derivedPrefix = publisherPrefix.trim() || sanitizePrefix(trimmedName);
-      const derivedSolution = solutionName.trim() || sanitizeSolutionName(trimmedName);
+      const targetSolutionName = solutionMode === "existing"
+        ? selectedSolution?.uniqueName
+        : derivedNewSolution;
+      const targetPublisherPrefix = solutionMode === "existing"
+        ? selectedSolution?.publisherPrefix
+        : derivedNewPrefix;
+
+      if (!targetSolutionName || !targetPublisherPrefix) {
+        throw new Error("Choose a target solution before continuing.");
+      }
 
       const { migrationJobId } = await client.createMigrationJob({
         name: trimmedName,
-        targetSolutionName: derivedSolution,
-        targetPublisherPrefix: derivedPrefix,
+        targetSolutionName,
+        targetPublisherPrefix,
       });
       onJobCreated(migrationJobId);
     } catch (e) {
@@ -92,33 +166,98 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
       <Card className={styles.card}>
         <CardHeader header={<strong>Target solution &amp; publisher</strong>} />
         <Body1 className={styles.hint}>
-          A new solution and publisher will be created for the migrated tables.
-          Defaults are derived from the job name; override here if you prefer.
+          Create a dedicated solution for this migration, or place migrated
+          tables into an existing unmanaged solution.
         </Body1>
-        <Field
-          label="Publisher prefix"
-          hint="2-8 lowercase letters, used to prefix the migrated table names (e.g. contoso_customer)."
-          validationState={prefixError ? "error" : "none"}
-          validationMessage={prefixError ?? undefined}
+        <RadioGroup
+          layout="horizontal"
+          value={solutionMode}
+          onChange={(_e, d) => setSolutionMode(d.value as SolutionMode)}
         >
-          <Input
-            value={publisherPrefix}
-            onChange={(_e, d) => setPublisherPrefix(d.value.toLowerCase())}
-            placeholder={sanitizePrefix(jobName) || "contoso"}
-          />
-        </Field>
-        <Field
-          label="Solution unique name"
-          hint="Letters and digits, no spaces."
-          validationState={solError ? "error" : "none"}
-          validationMessage={solError ?? undefined}
-        >
-          <Input
-            value={solutionName}
-            onChange={(_e, d) => setSolutionName(d.value)}
-            placeholder={sanitizeSolutionName(jobName) || "ContosoCRM"}
-          />
-        </Field>
+          <Radio value="new" label="Create new solution" />
+          <Radio value="existing" label="Use existing solution" />
+        </RadioGroup>
+
+        {solutionsLoading && (
+          <div className={styles.loadingLine} role="status" aria-live="polite">
+            <Spinner size="tiny" />
+            Loading existing solutions...
+          </div>
+        )}
+
+        {solutionMode === "new" ? (
+          <div className={styles.twoCol}>
+            <Field
+              label="Solution unique name"
+              hint="Letters and digits, no spaces."
+              validationState={solError ? "error" : "none"}
+              validationMessage={solError ?? undefined}
+            >
+              <Input
+                value={solutionName}
+                onChange={(_e, d) => setSolutionName(d.value)}
+                placeholder={sanitizeSolutionName(jobName) || "ContosoCRM"}
+              />
+            </Field>
+            <Field
+              label="Publisher prefix"
+              hint="2-8 lowercase letters."
+              validationState={prefixError ? "error" : "none"}
+              validationMessage={prefixError ?? undefined}
+            >
+              <Input
+                value={publisherPrefix}
+                onChange={(_e, d) => setPublisherPrefix(d.value.toLowerCase())}
+                placeholder={sanitizePrefix(jobName) || "contoso"}
+              />
+            </Field>
+          </div>
+        ) : (
+          <Field
+            label="Existing solution"
+            hint={
+              solutionsLoading
+                ? "Loading unmanaged solutions from this environment."
+                : selectedSolution
+                  ? `Publisher prefix: ${selectedSolution.publisherPrefix}`
+                  : undefined
+            }
+          >
+            <Dropdown
+              value={selectedSolution ? `${selectedSolution.friendlyName} (${selectedSolution.uniqueName})` : ""}
+              selectedOptions={selectedSolutionUniqueName ? [selectedSolutionUniqueName] : []}
+              onOptionSelect={(_e, d) => setSelectedSolutionUniqueName(String(d.optionValue ?? ""))}
+              disabled={solutionsLoading || solutions.length === 0}
+              placeholder={solutionsLoading ? "Loading solutions..." : "Choose a solution"}
+            >
+              {solutions.map((solution) => (
+                <Option
+                  key={solution.solutionId}
+                  value={solution.uniqueName}
+                  text={`${solution.friendlyName} (${solution.uniqueName})`}
+                >
+                  {solution.friendlyName} ({solution.uniqueName})
+                </Option>
+              ))}
+            </Dropdown>
+          </Field>
+        )}
+
+        {duplicateSolution && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              A solution named <strong>{duplicateSolution.uniqueName}</strong> already exists.
+              Choose "Use existing solution" to target it, or enter a different unique name.
+            </MessageBarBody>
+          </MessageBar>
+        )}
+        {solutionsError && (
+          <MessageBar intent="warning">
+            <MessageBarBody>
+              Existing solutions could not be loaded: {solutionsError}
+            </MessageBarBody>
+          </MessageBar>
+        )}
       </Card>
       <MessageBar intent="info">
         <MessageBarBody>

@@ -9,5 +9,31 @@
   "buildPath": "dist",
   "buildEntryPoint": "dist/index.html",
   "connectionReferences": {},
-  "databaseReferences": {}
+  "databaseReferences": {
+    "default.cds": {
+      "dataSources": {
+        "migrationjobs": {
+          "entitySetName": "acp_migrationjobs",
+          "logicalName": "acp_migrationjob",
+          "isHidden": false
+        },
+        "notes": {
+          "entitySetName": "annotations",
+          "logicalName": "annotation",
+          "isHidden": false
+        },
+        "solutions": {
+          "entitySetName": "solutions",
+          "logicalName": "solution",
+          "isHidden": false
+        },
+        "publishers": {
+          "entitySetName": "publishers",
+          "logicalName": "publisher",
+          "isHidden": false
+        }
+      },
+      "environmentVariableName": ""
+    }
+  }
 }

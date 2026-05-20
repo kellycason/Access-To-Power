@@ -67,6 +67,8 @@ public sealed class AccessColumn
     [JsonPropertyName("isAutoNumber")] public bool IsAutoNumber { get; set; }
     [JsonPropertyName("defaultValue")] public string? DefaultValue { get; set; }
     [JsonPropertyName("description")] public string? Description { get; set; }
+    [JsonPropertyName("detectedDateOnly")] public bool? DetectedDateOnly { get; set; }
+    [JsonPropertyName("detectedMaxDecimals")] public int? DetectedMaxDecimals { get; set; }
     [JsonPropertyName("issues")] public List<ManifestIssue>? Issues { get; set; }
 }
 

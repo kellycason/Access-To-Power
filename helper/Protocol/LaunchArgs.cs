@@ -10,12 +10,19 @@ public sealed record LaunchArgs
     public required string EnvironmentUrl { get; init; }
     public required string TenantId { get; init; }
     public required string JobName { get; init; }
+    public LaunchMode Mode { get; init; } = LaunchMode.FullUpload;
+
+    /// <summary>
+    /// When Mode is <see cref="LaunchMode.Migrate"/>, controls which phases run.
+    /// Ignored for other modes.
+    /// </summary>
+    public MigratePhase Phase { get; init; } = MigratePhase.Full;
 
     /// <summary>
     /// Accepts either:
-    ///   accesstopower://launch?jobId={guid}&env=https://...&tenant={guid}&name=...
+    ///   accesstopower://launch?jobId={guid}&env=https://...&tenant={guid}&name=...&mode=snapshot
     /// or positional CLI args:
-    ///   AccessToPowerHelper.exe --job-id {guid} --env https://... --tenant {guid} --name ...
+    ///   AccessToPowerHelper.exe --job-id {guid} --env https://... --tenant {guid} --name ... [--mode snapshot]
     /// </summary>
     public static LaunchArgs Parse(string[] argv)
     {
@@ -42,7 +49,9 @@ public sealed record LaunchArgs
             jobId: q.GetValueOrDefault("jobId"),
             envUrl: q.GetValueOrDefault("env"),
             tenant: q.GetValueOrDefault("tenant"),
-            name: q.GetValueOrDefault("name"));
+            name: q.GetValueOrDefault("name"),
+            mode: q.GetValueOrDefault("mode"),
+            phase: q.GetValueOrDefault("phase"));
     }
 
     private static Dictionary<string, string> ParseQuery(string query)
@@ -63,7 +72,7 @@ public sealed record LaunchArgs
 
     private static LaunchArgs ParseFlags(string[] argv)
     {
-        string? jobId = null, envUrl = null, tenant = null, name = null;
+        string? jobId = null, envUrl = null, tenant = null, name = null, mode = null, phase = null;
         for (var i = 0; i < argv.Length - 1; i++)
         {
             switch (argv[i])
@@ -72,12 +81,14 @@ public sealed record LaunchArgs
                 case "--env": envUrl = argv[++i]; break;
                 case "--tenant": tenant = argv[++i]; break;
                 case "--name": name = argv[++i]; break;
+                case "--mode": mode = argv[++i]; break;
+                case "--phase": phase = argv[++i]; break;
             }
         }
-        return Build(jobId, envUrl, tenant, name);
+        return Build(jobId, envUrl, tenant, name, mode, phase);
     }
 
-    private static LaunchArgs Build(string? jobId, string? envUrl, string? tenant, string? name)
+    private static LaunchArgs Build(string? jobId, string? envUrl, string? tenant, string? name, string? mode, string? phase = null)
     {
         if (!Guid.TryParse(jobId, out var jid) || jid == Guid.Empty)
             throw new ArgumentException("jobId must be a non-empty GUID.");
@@ -109,6 +120,41 @@ public sealed record LaunchArgs
             EnvironmentUrl = envUri.GetLeftPart(UriPartial.Authority),
             TenantId = tid.ToString("D"),
             JobName = safeName,
+            Mode = string.Equals(mode, "snapshot", StringComparison.OrdinalIgnoreCase)
+                ? LaunchMode.SnapshotOnly
+                : string.Equals(mode, "migrate", StringComparison.OrdinalIgnoreCase)
+                    ? LaunchMode.Migrate
+                    : LaunchMode.FullUpload,
+            Phase = string.Equals(phase, "schema", StringComparison.OrdinalIgnoreCase)
+                ? MigratePhase.SchemaOnly
+                : string.Equals(phase, "data", StringComparison.OrdinalIgnoreCase)
+                    ? MigratePhase.DataOnly
+                    : MigratePhase.Full,
         };
     }
+}
+
+public enum LaunchMode
+{
+    /// <summary>Pick an Access database and upload manifest + rows + schema snapshot.</summary>
+    FullUpload,
+    /// <summary>Skip the Access pick. Only capture and upload the Dataverse schema snapshot.</summary>
+    SnapshotOnly,
+    /// <summary>Read the approved migration plan annotation and create schema/data in Dataverse.</summary>
+    Migrate,
+}
+
+/// <summary>
+/// Sub-mode for <see cref="LaunchMode.Migrate"/>. Lets callers split a
+/// migration into a schema-only provisioning step and a separate data-load
+/// step so they can inspect the new tables before any rows are written.
+/// </summary>
+public enum MigratePhase
+{
+    /// <summary>Schema + data + lookups + validation in a single pass.</summary>
+    Full,
+    /// <summary>Provision the schema (Pass 1 only), then stop so the user can review.</summary>
+    SchemaOnly,
+    /// <summary>Skip schema. Resume from data load through validation. Assumes schema already exists.</summary>
+    DataOnly,
 }

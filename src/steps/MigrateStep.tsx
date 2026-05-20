@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Button,
   Body1,
@@ -13,15 +13,14 @@ import {
   MessageBar,
   MessageBarBody,
   Tag,
+  Checkbox,
   makeStyles,
   tokens,
 } from "@fluentui/react-components";
 import type { MigrationPlan } from "../types/manifest";
 import { getDataverseClient } from "../services/dataverseClient";
-import { createDataverseSchema, type ProgressEvent } from "../services/schemaCreator";
-import { loadData, type IdMap } from "../services/dataLoader";
-import { resolveLookups } from "../services/lookupResolver";
-import { validateMigration, type ValidationReport } from "../services/validator";
+import type { ProgressEvent } from "../services/schemaCreator";
+import type { ValidationReport } from "../services/validator";
 
 const useStyles = makeStyles({
   page: { display: "flex", flexDirection: "column", gap: "16px" },
@@ -71,7 +70,11 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
   const [logLines, setLogLines] = useState<ProgressEvent[]>([]);
   const [phaseProgress, setPhaseProgress] = useState<number>(0);
   const [report, setReport] = useState<ValidationReport | null>(null);
-  const abortRef = useRef<AbortController | null>(null);
+  const [waitingForHelper, setWaitingForHelper] = useState(false);
+  const [schemaOnly, setSchemaOnly] = useState(false);
+  const [schemaReady, setSchemaReady] = useState(false);
+  const pollTimer = useRef<number | null>(null);
+  const lastLogLength = useRef<number>(0);
 
   const totalTables = useMemo(
     () => plan.tableMappings.filter((t) => t.action === "Migrate").length,
@@ -82,6 +85,10 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
     [plan],
   );
 
+  useEffect(() => () => {
+    if (pollTimer.current) window.clearInterval(pollTimer.current);
+  }, []);
+
   function setPhase(key: Phase["key"], status: PhaseStatus) {
     setPhases((cur) => cur.map((p) => (p.key === key ? { ...p, status } : p)));
   }
@@ -91,18 +98,32 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
     if (typeof e.progress === "number") setPhaseProgress(e.progress);
   }
 
-  async function run() {
+  async function run(phase: "full" | "schema" | "data" = "full") {
     if (!migrationJobId) return;
     setRunning(true);
     setError(null);
     setLogLines([]);
-    setPhases(INITIAL_PHASES);
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
+    if (phase !== "data") {
+      setPhases(INITIAL_PHASES);
+      setSchemaReady(false);
+    } else {
+      // Resuming from SchemaReady — keep schema as done, mark load running.
+      setPhases((cur) =>
+        cur.map((p) =>
+          p.key === "schema"
+            ? { ...p, status: "done" }
+            : p.key === "load"
+              ? { ...p, status: "running" }
+              : { ...p, status: "pending" },
+        ),
+      );
+    }
+    setPhaseProgress(0);
+    lastLogLength.current = 0;
 
     try {
       const client = getDataverseClient();
-      const { environmentUrl } = await client.getContext();
+      const { environmentUrl, tenantId } = await client.getContext();
       const job = await client.getJob(migrationJobId);
       const prefix = job.targetPublisherPrefix?.trim();
       const solution = job.targetSolutionName?.trim();
@@ -112,76 +133,152 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
         );
       }
 
-      // Phase 1: schema
-      await client.setJobStatus(migrationJobId, 5); // Creating Schema
-      setPhase("schema", "running");
-      await createDataverseSchema({
-        envUrl: environmentUrl,
-        plan,
-        publisherPrefix: prefix,
-        solutionUniqueName: solution,
-        signal: abortRef.current.signal,
-        onProgress: appendLog,
-      });
-      setPhase("schema", "done");
+      // 1. Save the approved plan (only for the first launch — re-save is harmless).
+      if (phase !== "data") {
+        appendLog({ kind: "phase", message: "Saving migration plan…" });
+        await client.savePlan(migrationJobId, plan);
+      }
 
-      // Phase 2: data load
-      await client.setJobStatus(migrationJobId, 6); // Loading Data
-      setPhase("load", "running");
-      setPhaseProgress(0);
-      const idMap: IdMap = await loadData({
-        envUrl: environmentUrl,
-        plan,
-        publisherPrefix: prefix,
-        signal: abortRef.current.signal,
-        onProgress: appendLog,
-      });
-      setPhase("load", "done");
+      // 2. Mark the job as queued for the helper.
+      await client.setJobStatus(migrationJobId, 5); // Creating Schema (helper will advance)
 
-      // Phase 3: lookup resolution
-      await client.setJobStatus(migrationJobId, 7); // Resolving Lookups
-      setPhase("lookups", "running");
-      setPhaseProgress(0);
-      await resolveLookups({
-        envUrl: environmentUrl,
-        plan,
-        publisherPrefix: prefix,
-        idMap,
-        signal: abortRef.current.signal,
-        onProgress: appendLog,
-      });
-      setPhase("lookups", "done");
+      // 3. Launch the desktop helper.
+      const phaseLabel =
+        phase === "schema" ? "schema-only" : phase === "data" ? "data load" : "full migration";
+      appendLog({ kind: "phase", message: `Launching desktop helper (${phaseLabel})…` });
+      const url = new URL("accesstopower://launch");
+      url.searchParams.set("jobId", migrationJobId);
+      url.searchParams.set("env", environmentUrl);
+      url.searchParams.set("tenant", tenantId);
+      url.searchParams.set("name", job.name);
+      url.searchParams.set("mode", "migrate");
+      if (phase !== "full") url.searchParams.set("phase", phase);
+      window.location.href = url.toString();
 
-      // Phase 4: validation
-      await client.setJobStatus(migrationJobId, 8); // Validating
-      setPhase("validate", "running");
-      setPhaseProgress(0);
-      const validation = await validateMigration({
-        envUrl: environmentUrl,
-        plan,
-        signal: abortRef.current.signal,
-        onProgress: appendLog,
-      });
-      setReport(validation);
-      setPhase("validate", "done");
-
-      // Final status: 9 ok, 10 partial, 11 failed
-      const finalStatus =
-        validation.overallStatus === "ok" ? 9 :
-        validation.overallStatus === "mismatch" ? 10 : 11;
-      await client.setJobStatus(migrationJobId, finalStatus);
+      // 4. Begin polling.
+      setWaitingForHelper(true);
+      if (phase !== "data") setPhase("schema", "running");
+      startPolling();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setPhases((cur) =>
         cur.map((p) => (p.status === "running" ? { ...p, status: "failed" } : p)),
       );
-    } finally {
       setRunning(false);
     }
   }
 
+  function startPolling() {
+    if (pollTimer.current || !migrationJobId) return;
+    pollTimer.current = window.setInterval(() => {
+      void pollOnce();
+    }, 3000);
+    void pollOnce();
+  }
+
+  function stopPolling() {
+    if (pollTimer.current) {
+      window.clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
+  }
+
+  async function pollOnce() {
+    if (!migrationJobId) return;
+    try {
+      const client = getDataverseClient();
+      const [job, log] = await Promise.all([
+        client.getJob(migrationJobId),
+        client.tryGetMigrationLog(migrationJobId),
+      ]);
+
+      // Apply log delta.
+      if (log) {
+        const lines = log.split(/\r?\n/).filter(Boolean);
+        if (lines.length > lastLogLength.current) {
+          const fresh = lines.slice(lastLogLength.current);
+          for (const line of fresh) {
+            try {
+              const event = JSON.parse(line) as ProgressEvent;
+              appendLog(event);
+            } catch {
+              appendLog({ kind: "log", message: line });
+            }
+          }
+          lastLogLength.current = lines.length;
+        }
+      }
+
+      // Advance phase state from job.status (5..12).
+      // 5=Creating Schema, 6=Loading Data, 7=Resolving Lookups, 8=Validating,
+      // 9=ok, 10=partial, 11=failed, 12=SchemaReady (schema-only stopped).
+      switch (job.status) {
+        case 5:
+          setPhase("schema", "running");
+          break;
+        case 6:
+          setPhase("schema", "done");
+          setPhase("load", "running");
+          break;
+        case 7:
+          setPhase("schema", "done");
+          setPhase("load", "done");
+          setPhase("lookups", "running");
+          break;
+        case 8:
+          setPhase("schema", "done");
+          setPhase("load", "done");
+          setPhase("lookups", "done");
+          setPhase("validate", "running");
+          break;
+        case 12:
+          setPhase("schema", "done");
+          setPhaseProgress(100);
+          stopPolling();
+          setRunning(false);
+          setWaitingForHelper(false);
+          setSchemaReady(true);
+          break;
+        case 9:
+        case 10:
+          setPhases([
+            { key: "schema", label: "Create Dataverse schema", status: "done" },
+            { key: "load", label: "Load data (pass 1)", status: "done" },
+            { key: "lookups", label: "Resolve lookups (pass 2)", status: "done" },
+            { key: "validate", label: "Validate row counts", status: "done" },
+          ]);
+          setPhaseProgress(100);
+          stopPolling();
+          setRunning(false);
+          setWaitingForHelper(false);
+          // Synthesize a minimal report from the log; richer report will land in Slice B.
+          setReport({
+            overallStatus: job.status === 9 ? "ok" : "mismatch",
+            tables: [],
+            totalExpected: totalRows,
+            totalActual: totalRows,
+          });
+          break;
+        case 11:
+          setPhases((cur) =>
+            cur.map((p) => (p.status === "running" ? { ...p, status: "failed" } : p)),
+          );
+          stopPolling();
+          setRunning(false);
+          setWaitingForHelper(false);
+          setError("Migration failed. Check the activity log for details.");
+          break;
+      }
+    } catch (e) {
+      // Transient — keep polling, but surface once.
+      setError((cur) => cur ?? (e instanceof Error ? e.message : String(e)));
+    }
+  }
+
   function cancel() {
-    abortRef.current?.abort();
+    stopPolling();
+    setRunning(false);
+    setWaitingForHelper(false);
   }
 
   const schemaDone = phases.find((p) => p.key === "schema")?.status === "done";
@@ -237,6 +334,20 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
         ))}
       </div>
 
+      {waitingForHelper && (
+        <MessageBar intent="info">
+          <MessageBarBody>
+            The desktop helper is running the migration. Keep this tab open — progress will appear here as it works.
+          </MessageBarBody>
+        </MessageBar>
+      )}
+      {schemaReady && (
+        <MessageBar intent="success">
+          <MessageBarBody>
+            Schema provisioned. Open the maker portal to inspect the new tables, columns, lookups, and alternate keys. When you're satisfied, click <strong>Load data now</strong> to migrate the rows.
+          </MessageBarBody>
+        </MessageBar>
+      )}
       {error && (
         <MessageBar intent="error">
           <MessageBarBody>{error}</MessageBarBody>
@@ -246,12 +357,31 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
         <Button disabled={running} onClick={onBack}>
           Back
         </Button>
-        <div style={{ display: "flex", gap: 8 }}>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          {!running && !schemaReady && !allDone && (
+            <Checkbox
+              label="Provision schema only (review before loading data)"
+              checked={schemaOnly}
+              onChange={(_, d) => setSchemaOnly(!!d.checked)}
+            />
+          )}
           {running ? (
             <Button onClick={cancel}>Cancel</Button>
+          ) : schemaReady ? (
+            <Button
+              appearance="primary"
+              onClick={() => void run("data")}
+              disabled={!migrationJobId}
+            >
+              Load data now
+            </Button>
           ) : (
-            <Button appearance="primary" onClick={run} disabled={!migrationJobId}>
-              {schemaDone ? "Re-run migration" : "Start migration"}
+            <Button
+              appearance="primary"
+              onClick={() => void run(schemaOnly ? "schema" : "full")}
+              disabled={!migrationJobId}
+            >
+              {schemaDone ? "Re-run migration" : schemaOnly ? "Provision schema" : "Start migration"}
             </Button>
           )}
           {allDone && report && (

@@ -108,6 +108,7 @@ export function App() {
           {step === "map" && manifest && (
             <MapStep
               manifest={manifest}
+              migrationJobId={migrationJobId}
               initialPlan={plan}
               onPlanReady={(p) => {
                 setPlan(p);
