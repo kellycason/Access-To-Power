@@ -15,7 +15,7 @@ a remediation report for anything that can't move automatically.
 | --- | --- |
 | 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
-| 🧩 **Power Platform solution file** | ask your admin (built from this repo) |
+| 🧩 **Deploy the Code App + Dataverse tables** | clone this repo → `npm install` → `npm run power:push` (see [INSTALL.md](INSTALL.md)). The `acp_*` Dataverse tables are auto-created the first time the helper runs. |
 
 You need: a Windows PC, a Power Apps Premium license, and a Dataverse environment where you're a System Customizer.
 
@@ -171,23 +171,3 @@ runs:
 - `edge-cases.accdb` — high-precision lat/long doubles, decimal precision, multiline/long memo text, lookup-wizard metadata, and unsupported binary-style fields.
 
 Regenerate any sample with the matching `samples/create-*-accdb.ps1` script and `-Force`.
-
-## Roadmap
-
-- [x] Wizard scaffold (Connect → Scan → Map → Migrate → Validate)
-- [x] Manifest contract (`src/types/manifest.ts`)
-- [x] Dataverse migration schema spec (`dataverse/migration-schema.yml`)
-- [x] Mock manifest loader for local dev
-- [x] Publisher + solution provisioning (`dataverse/01_create_publisher_and_solution.ps1`)
-- [x] `acp_*` table provisioning (`dataverse/02_create_tables.ps1`)
-- [x] Signed .NET helper (`helper/`) — MSAL+WAM, ACE OLEDB read-only, NDJSON streaming, protocol handler
-- [x] Connect step: real `acp_migrationjob` creation via Dataverse Web API
-- [x] Scan step: launches `accesstopower://` and polls for the uploaded manifest
-- [ ] Power Apps SDK wiring (replace direct Web API fetch with `@microsoft/power-apps` data client)
-- [ ] CreateDataverseSchema cloud flow
-- [ ] LoadDataverseData cloud flow
-- [ ] ResolveLookups cloud flow
-- [ ] ValidateMigration cloud flow
-- [ ] PAD helper flow (alternate to .NET helper)
-- [ ] Throttle-aware bulk upsert client (respects `Retry-After`)
-- [ ] Remediation report PDF export
