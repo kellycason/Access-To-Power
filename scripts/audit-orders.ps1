@@ -1,3 +1,4 @@
+# Replace with your Dataverse environment URL
 $envUrl = "https://yourorg.crm.dynamics.com"
 $token  = az account get-access-token --resource $envUrl --query accessToken -o tsv
 $h = @{ Authorization="Bearer $token"; Accept="application/json"

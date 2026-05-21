@@ -1,4 +1,5 @@
 $ErrorActionPreference = "Stop"
+# Replace with your Dataverse environment URL, e.g. https://yourorg.crm.dynamics.com
 $envUrl = "https://yourorg.crm.dynamics.com"
 $token = az account get-access-token --resource $envUrl --query accessToken -o tsv
 $hd = @{
