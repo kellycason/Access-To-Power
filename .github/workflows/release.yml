@@ -1,0 +1,73 @@
+name: Release helper installer
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.1) — overrides tag-derived value'
+        required: false
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+          dotnet-quality: 'preview'
+
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          $v = '${{ inputs.version }}'
+          if (-not $v) { $v = '${{ github.ref_name }}' -replace '^v', '' }
+          if (-not $v) { $v = '0.0.0' }
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+          Write-Host "Version: $v"
+
+      - name: Build helper installer zip
+        shell: pwsh
+        run: |
+          pwsh -File scripts/package-helper-installer.ps1 -Version ${{ steps.ver.outputs.version }}
+
+      - name: Verify zip exists
+        shell: pwsh
+        run: |
+          $zip = "artifacts/AccessToPowerHelper-${{ steps.ver.outputs.version }}-win-x64.zip"
+          if (-not (Test-Path $zip)) { throw "Expected zip not found: $zip" }
+          Get-Item $zip | Select-Object FullName, Length
+
+      - name: Create or update GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: pwsh
+        run: |
+          $tag = '${{ github.ref_name }}'
+          if ($tag -notmatch '^v') { $tag = "v${{ steps.ver.outputs.version }}" }
+          $zip = "artifacts/AccessToPowerHelper-${{ steps.ver.outputs.version }}-win-x64.zip"
+          $pdf = "docs/install.pdf"
+          $assets = @($zip)
+          if (Test-Path $pdf) { $assets += $pdf }
+
+          $exists = gh release view $tag 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            Write-Host "Release $tag already exists — uploading assets (clobber)."
+            gh release upload $tag @assets --clobber
+          } else {
+            Write-Host "Creating release $tag with assets."
+            gh release create $tag @assets `
+              --title "$tag — Access-To-Power Helper" `
+              --generate-notes
+          }

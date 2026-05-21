@@ -7,6 +7,8 @@ a remediation report for anything that can't move automatically.
 > Migrates: **tables, columns, relationships, data**
 > Does **NOT** migrate: forms, reports, macros, VBA, queries, attachments, OLE objects
 
+![Architecture diagram](docs/architecture-diagram.png)
+
 ## Architecture
 
 ```
