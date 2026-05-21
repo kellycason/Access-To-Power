@@ -15,7 +15,7 @@ a remediation report for anything that can't move automatically.
 | --- | --- |
 | 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
-| 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-unmanaged.zip) — import via Power Apps → Solutions → Import. (Or skip this — the helper auto-creates the tables on first run.) |
+| 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-unmanaged.zip) — import via Power Apps → Solutions → Import. |
 | 🚀 **Deploy the Code App** | clone this repo → `npm install` → `npm run power:push` (see [INSTALL.md](INSTALL.md)) |
 
 You need: a Windows PC, a Power Apps Premium license, and a Dataverse environment where you're a System Customizer.
