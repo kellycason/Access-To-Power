@@ -39,3 +39,15 @@ fixtures/local/
 /migration_output.txt
 scripts/_*.out
 scripts/_*.txt
+
+# Root-level one-off scratch scripts (created during ad-hoc debugging)
+/cleanup_*.ps1
+/force_del*.ps1
+/inspect_*.ps1
+/manual_cleanup.ps1
+/task.ps1
+/verify.ps1
+/metadata.xml
+
+# Helper installer build output
+/artifacts/

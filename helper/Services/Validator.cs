@@ -95,6 +95,45 @@ public sealed class Validator
                 Status = status,
                 Message = message,
             };
+            // Surface column-level issues that the user would otherwise only
+            // see by digging into manifest.json. Dropped columns (multi-value,
+            // attachment, OLE) are particularly important because the row
+            // counts will read green even though those columns are empty.
+            if (accessTable is not null)
+            {
+                foreach (var col in accessTable.Columns)
+                {
+                    if (!string.IsNullOrEmpty(col.UnsupportedReason))
+                    {
+                        line.DroppedColumns.Add($"{col.Name}: {col.UnsupportedReason}");
+                    }
+                    else if (col.DataType is "OleObject" or "Binary" or "Attachment" or "Multivalue")
+                    {
+                        line.DroppedColumns.Add($"{col.Name}: {col.DataType}");
+                    }
+                    if (col.Issues is null) continue;
+                    foreach (var iss in col.Issues)
+                    {
+                        if (string.Equals(iss.Severity, "Info", StringComparison.OrdinalIgnoreCase)) continue;
+                        var entry = $"{col.Name}: {iss.Message}";
+                        if (!line.Warnings.Contains(entry, StringComparer.Ordinal))
+                        {
+                            line.Warnings.Add(entry);
+                        }
+                    }
+                }
+                if (accessTable.Issues is not null)
+                {
+                    foreach (var iss in accessTable.Issues)
+                    {
+                        if (string.Equals(iss.Severity, "Info", StringComparison.OrdinalIgnoreCase)) continue;
+                        if (!line.Warnings.Contains(iss.Message, StringComparer.Ordinal))
+                        {
+                            line.Warnings.Add(iss.Message);
+                        }
+                    }
+                }
+            }
             report.Tables.Add(line);
 
             var pct = (int)Math.Round(100.0 * (i + 1) / migrateTables.Count);
@@ -185,7 +224,7 @@ public sealed class Validator
 
         sb.Append("<h2>Per-table results</h2>");
         sb.Append("<table><thead><tr><th>Access table</th><th>Dataverse table</th>");
-        sb.Append("<th>Expected</th><th>Rejected</th><th>Loaded</th><th>Status</th><th>Message</th></tr></thead><tbody>");
+        sb.Append("<th>Expected</th><th>Rejected</th><th>Loaded</th><th>Status</th><th>Notes</th></tr></thead><tbody>");
         foreach (var t in report.Tables)
         {
             sb.Append("<tr>");
@@ -195,7 +234,32 @@ public sealed class Validator
             sb.Append("<td>").Append(t.RejectedRows).Append("</td>");
             sb.Append("<td>").Append(t.ActualRows).Append("</td>");
             sb.Append("<td>").Append(statusBadge(t.Status)).Append("</td>");
-            sb.Append("<td>").Append(System.Net.WebUtility.HtmlEncode(t.Message ?? "")).Append("</td>");
+            sb.Append("<td>");
+            if (!string.IsNullOrEmpty(t.Message))
+            {
+                sb.Append("<div>").Append(System.Net.WebUtility.HtmlEncode(t.Message)).Append("</div>");
+            }
+            if (t.DroppedColumns.Count > 0)
+            {
+                sb.Append("<div style='color:#bf8c00'><b>Columns dropped:</b><ul style='margin:4px 0 0 18px;padding:0'>");
+                foreach (var dc in t.DroppedColumns)
+                {
+                    sb.Append("<li>").Append(System.Net.WebUtility.HtmlEncode(dc)).Append("</li>");
+                }
+                sb.Append("</ul></div>");
+            }
+            if (t.Warnings.Count > 0)
+            {
+                sb.Append("<details style='margin-top:4px'><summary style='cursor:pointer;color:#605e5c'>")
+                  .Append(t.Warnings.Count).Append(" warning").Append(t.Warnings.Count == 1 ? "" : "s")
+                  .Append("</summary><ul style='margin:4px 0 0 18px;padding:0'>");
+                foreach (var w in t.Warnings)
+                {
+                    sb.Append("<li>").Append(System.Net.WebUtility.HtmlEncode(w)).Append("</li>");
+                }
+                sb.Append("</ul></details>");
+            }
+            sb.Append("</td>");
             sb.Append("</tr>");
         }
         sb.Append("</tbody></table>");
@@ -377,5 +441,17 @@ public sealed class MigrationReport
         /// <summary>"ok" | "mismatch" | "extra" | "error"</summary>
         public string Status { get; set; } = "ok";
         public string? Message { get; set; }
+        /// <summary>
+        /// Columns that were not migrated as live data — multi-value lookups,
+        /// attachments, OLE blobs, binary, or anything else the source flagged
+        /// as unsupported. Each entry is "ColumnName: reason".
+        /// </summary>
+        public List<string> DroppedColumns { get; set; } = new();
+        /// <summary>
+        /// Per-table Warning/Error issues from the source manifest that the
+        /// user should see in the post-migration summary (truncation hints,
+        /// precision-loss, value-list discoveries, etc.). De-duplicated.
+        /// </summary>
+        public List<string> Warnings { get; set; } = new();
     }
 }

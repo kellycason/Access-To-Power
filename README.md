@@ -119,6 +119,45 @@ Edit `power.config.json` to point at your environment:
 - `environmentId`: GUID of the target Dataverse environment
 - `appId`: filled in by the CLI on first push
 
+## Desktop helper distribution
+
+Power Platform solution import does not install the Windows helper. The helper
+must be packaged, hosted, and installed on each workstation that needs to read
+Access databases.
+
+Build the distributable helper zip:
+
+```powershell
+npm run helper:package
+```
+
+This creates `artifacts/AccessToPowerHelper-<version>-win-x64.zip`. Host that
+zip in a trusted software distribution location such as Intune, an internal
+software portal, Azure Blob Storage, or a release feed. Before building/pushing
+the Code App, set:
+
+```powershell
+$env:VITE_HELPER_INSTALLER_URL = "https://contoso.example/downloads/AccessToPowerHelper-0.1.0-win-x64.zip"
+$env:VITE_HELPER_INSTALLER_VERSION = "0.1.0"
+```
+
+The app will show this download link on the first step and in helper-launch
+troubleshooting panels. The helper installer registers the per-user
+`accesstopower://` protocol handler and adds an uninstall entry under Windows
+Settings > Apps.
+
+## Sample Access databases
+
+The `samples/` folder contains generated `.accdb` files for repeatable test
+runs:
+
+- `northwind-lite.accdb` — baseline tables, relationships, currency, booleans, and memo fields.
+- `hr-mid.accdb` — self-references, date+time values, currency, memo fields, and `SINGLE` floats.
+- `library-complex.accdb` — deeper relationship chains, N:N-style junctions, byte values, and larger memo payloads.
+- `edge-cases.accdb` — high-precision lat/long doubles, decimal precision, multiline/long memo text, lookup-wizard metadata, and unsupported binary-style fields.
+
+Regenerate any sample with the matching `samples/create-*-accdb.ps1` script and `-Force`.
+
 ## Roadmap
 
 - [x] Wizard scaffold (Connect → Scan → Map → Migrate → Validate)

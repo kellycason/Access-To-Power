@@ -41,4 +41,11 @@ public sealed class FieldMapping
     [JsonPropertyName("isAlternateKey")] public bool IsAlternateKey { get; set; }
     [JsonPropertyName("isRequired")] public bool IsRequired { get; set; }
     [JsonPropertyName("lookupTarget")] public string? LookupTarget { get; set; }
+    [JsonPropertyName("choiceOptions")] public List<ChoiceOption>? ChoiceOptions { get; set; }
+}
+
+public sealed class ChoiceOption
+{
+    [JsonPropertyName("value")] public int Value { get; set; }
+    [JsonPropertyName("label")] public string Label { get; set; } = "";
 }

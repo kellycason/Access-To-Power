@@ -1,6 +1,5 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { FluentProvider, webLightTheme } from "@fluentui/react-components";
 import { App } from "./App";
 import "./index.css";
 
@@ -11,8 +10,6 @@ if (!container) {
 
 createRoot(container).render(
   <StrictMode>
-    <FluentProvider theme={webLightTheme}>
-      <App />
-    </FluentProvider>
+    <App />
   </StrictMode>,
 );

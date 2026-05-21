@@ -60,6 +60,26 @@ export interface AccessColumn {
    * promoted to Dataverse Decimal (precision &gt; 5) for fidelity.
    */
   detectedMaxDecimals?: number;
+  /**
+   * Discovered value-list labels for Lookup-Wizard-style columns (read via
+   * DAO since OLEDB doesn't expose RowSourceType / RowSource). When present
+   * the plan builder upgrades the column to a Dataverse Choice attribute and
+   * materializes integer codes for each label.
+   */
+  valueList?: string[];
+  /** True when DAO reports LimitToList=true on the column (informational). */
+  limitToList?: boolean;
+  /**
+   * Set when the column carries data that can't be represented in Dataverse
+   * via the baseline migration (multi-value lookup, attachment, OLE blob).
+   * The column's row values are emitted as null in NDJSON and the migration
+   * report surfaces the column under "dropped" so the user sees it.
+   */
+  unsupportedReason?:
+    | "Multivalue"
+    | "Attachment"
+    | "OleObject"
+    | "Binary";
   /** Issues the helper found while reading this column. */
   issues?: ManifestIssue[];
 }
@@ -185,6 +205,13 @@ export interface FieldMapping {
   isRequired: boolean;
   /** For Lookup: target Dataverse logical name. */
   lookupTarget?: string;
+  /**
+   * For Choice: materialized option list (label → integer value). Populated
+   * by the plan builder when the source column has a valueList. SchemaCreator
+   * uses it to build the inline OptionSet at attribute-create time; the data
+   * loader uses it to translate raw row labels into integer values at insert.
+   */
+  choiceOptions?: Array<{ value: number; label: string }>;
 }
 
 export interface TableMapping {

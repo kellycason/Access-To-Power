@@ -1,37 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  Button,
-  Card,
-  CardHeader,
-  Dropdown,
-  Field,
-  Input,
-  Option,
-  Radio,
-  RadioGroup,
-  Title3,
-  Body1,
-  MessageBar,
-  MessageBarBody,
-  Spinner,
-  makeStyles,
-} from "@fluentui/react-components";
+import { Alert } from "../ui/Alert";
+import { Button } from "../ui/Button";
+import { Card, CardHeader } from "../ui/Card";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Spinner } from "../ui/Spinner";
+import { cx } from "../ui/cx";
+import { HelperInstallPanel } from "../ui/HelperInstallPanel";
 import { getDataverseClient, type SolutionOption } from "../services/dataverseClient";
-
-const useStyles = makeStyles({
-  page: { display: "flex", flexDirection: "column", gap: "16px", maxWidth: "720px" },
-  card: { padding: "16px", display: "flex", flexDirection: "column", gap: "12px" },
-  actions: { display: "flex", gap: "8px", justifyContent: "flex-end" },
-  hint: { color: "var(--colorNeutralForeground3)", fontSize: "12px" },
-  twoCol: { display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" },
-  loadingLine: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    color: "var(--colorNeutralForeground3)",
-    fontSize: "12px",
-  },
-});
 
 interface Props {
   jobName: string;
@@ -44,12 +20,15 @@ const SOL_NAME_RE = /^[A-Za-z][A-Za-z0-9]+$/;
 type SolutionMode = "new" | "existing";
 
 export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
-  const styles = useStyles();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [solutionsError, setSolutionsError] = useState<string | null>(null);
   const [solutionsLoading, setSolutionsLoading] = useState(false);
   const [solutions, setSolutions] = useState<SolutionOption[]>([]);
+  // All publisher prefixes in this environment (lowercased) — independent of
+  // which solutions are surfaced in listSolutions(). Used to refuse a new
+  // prefix that collides with ANY existing publisher (managed/unmanaged/orphan).
+  const [allPublisherPrefixes, setAllPublisherPrefixes] = useState<string[]>([]);
 
   const [solutionMode, setSolutionMode] = useState<SolutionMode>("new");
   const [publisherPrefix, setPublisherPrefix] = useState("");
@@ -60,10 +39,12 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
     let cancelled = false;
     setSolutionsLoading(true);
     setSolutionsError(null);
-    getDataverseClient().listSolutions()
-      .then((items) => {
+    const client = getDataverseClient();
+    Promise.all([client.listSolutions(), client.listAllPublisherPrefixes()])
+      .then(([items, prefixes]) => {
         if (cancelled) return;
         setSolutions(items);
+        setAllPublisherPrefixes(prefixes);
         setSelectedSolutionUniqueName((current) => current || items[0]?.uniqueName || "");
       })
       .catch((e) => {
@@ -73,34 +54,42 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
       .finally(() => {
         if (!cancelled) setSolutionsLoading(false);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const selectedSolution = useMemo(
-    () => solutions.find((solution) => solution.uniqueName === selectedSolutionUniqueName) ?? null,
+    () => solutions.find((s) => s.uniqueName === selectedSolutionUniqueName) ?? null,
     [selectedSolutionUniqueName, solutions],
   );
 
   const derivedNewSolution = solutionName.trim() || sanitizeSolutionName(jobName);
   const derivedNewPrefix = publisherPrefix.trim() || sanitizePrefix(jobName);
-  const duplicateSolution = solutionMode === "new" && derivedNewSolution
-    ? solutions.find((solution) => solution.uniqueName.toLowerCase() === derivedNewSolution.toLowerCase()) ?? null
-    : null;
-
-  // Conflict check: if the typed prefix already belongs to a different
-  // publisher (different solution mapping), Dataverse will reject creating
-  // a second publisher with the same `customizationprefix`. Catch that here
-  // (guide Part 5) instead of letting the helper fail mid-schema-phase.
-  const conflictingPrefix = solutionMode === "new" && derivedNewPrefix
-    ? solutions.find((s) => s.publisherPrefix.toLowerCase() === derivedNewPrefix.toLowerCase()) ?? null
-    : null;
+  const duplicateSolution =
+    solutionMode === "new" && derivedNewSolution
+      ? solutions.find((s) => s.uniqueName.toLowerCase() === derivedNewSolution.toLowerCase()) ?? null
+      : null;
+  const conflictingPrefix =
+    solutionMode === "new" && derivedNewPrefix
+      ? solutions.find((s) => s.publisherPrefix.toLowerCase() === derivedNewPrefix.toLowerCase()) ?? null
+      : null;
+  // A prefix that doesn't belong to any unmanaged+visible solution may still be
+  // taken by another publisher in the environment (managed solution, orphan
+  // publisher, etc.). Refuse those too so the helper doesn't fail mid-flight.
+  const prefixTakenByOtherPublisher =
+    solutionMode === "new" && derivedNewPrefix && !conflictingPrefix
+      ? allPublisherPrefixes.includes(derivedNewPrefix.toLowerCase())
+      : false;
 
   const prefixError =
     solutionMode === "new" && publisherPrefix && !PUB_PREFIX_RE.test(publisherPrefix)
       ? "Use 2-8 lowercase letters/digits, starting with a letter."
       : solutionMode === "new" && conflictingPrefix
         ? `Prefix '${derivedNewPrefix}' is already used by publisher of solution '${conflictingPrefix.friendlyName}'. Pick a different prefix or use that existing solution.`
-        : null;
+        : solutionMode === "new" && prefixTakenByOtherPublisher
+          ? `Prefix '${derivedNewPrefix}' is already taken by another publisher in this environment. Pick a different prefix.`
+          : null;
   const solError =
     solutionMode === "new" && solutionName && !SOL_NAME_RE.test(solutionName)
       ? "Use letters and digits only; start with a letter."
@@ -108,11 +97,11 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
 
   const canSubmit = Boolean(
     jobName.trim() &&
-    !prefixError &&
-    !solError &&
-    !duplicateSolution &&
-    !busy &&
-    (solutionMode === "new" ? derivedNewSolution && derivedNewPrefix : selectedSolution),
+      !prefixError &&
+      !solError &&
+      !duplicateSolution &&
+      !busy &&
+      (solutionMode === "new" ? derivedNewSolution && derivedNewPrefix : selectedSolution),
   );
 
   async function createJob() {
@@ -121,17 +110,13 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
     try {
       const client = getDataverseClient();
       const trimmedName = jobName.trim();
-      const targetSolutionName = solutionMode === "existing"
-        ? selectedSolution?.uniqueName
-        : derivedNewSolution;
-      const targetPublisherPrefix = solutionMode === "existing"
-        ? selectedSolution?.publisherPrefix
-        : derivedNewPrefix;
-
+      const targetSolutionName =
+        solutionMode === "existing" ? selectedSolution?.uniqueName : derivedNewSolution;
+      const targetPublisherPrefix =
+        solutionMode === "existing" ? selectedSolution?.publisherPrefix : derivedNewPrefix;
       if (!targetSolutionName || !targetPublisherPrefix) {
         throw new Error("Choose a target solution before continuing.");
       }
-
       const { migrationJobId } = await client.createMigrationJob({
         name: trimmedName,
         targetSolutionName,
@@ -146,74 +131,65 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
   }
 
   return (
-    <div className={styles.page}>
-      <Title3>Connect to your Access database</Title3>
-      <Body1>
-        Name this migration job and choose where the migrated tables should
-        land. The local helper opens your <code>.accdb</code> file and uploads
-        its schema and data to Dataverse — no product logic runs locally.
-      </Body1>
-      <Card className={styles.card}>
-        <CardHeader header={<strong>Migration job</strong>} />
-        <Field label="Job name" required>
-          <Input
-            value={jobName}
-            onChange={(_e, d) => onJobNameChange(d.value)}
-            placeholder="e.g. Northwind 2026 cut-over"
-          />
-        </Field>
+    <div className="space-y-5 max-w-3xl">
+      <Card>
+        <CardHeader title="Migration job" description="Give this run a memorable name." />
+        <Input
+          label="Job name"
+          value={jobName}
+          onChange={(e) => onJobNameChange(e.target.value)}
+          placeholder="e.g. Northwind 2026 cut-over"
+        />
       </Card>
-      <Card className={styles.card}>
-        <CardHeader header={<strong>Target solution &amp; publisher</strong>} />
-        <Body1 className={styles.hint}>
-          Create a dedicated solution for this migration, or place migrated
-          tables into an existing unmanaged solution.
-        </Body1>
-        <RadioGroup
-          layout="horizontal"
-          value={solutionMode}
-          onChange={(_e, d) => setSolutionMode(d.value as SolutionMode)}
-        >
-          <Radio value="new" label="Create new solution" />
-          <Radio value="existing" label="Use existing solution" />
-        </RadioGroup>
+
+      <Card>
+        <CardHeader
+          title="Target solution & publisher"
+          description="Create a dedicated solution for this migration, or place migrated tables into an existing unmanaged solution."
+        />
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
+          <ModeTile
+            active={solutionMode === "new"}
+            onClick={() => setSolutionMode("new")}
+            title="Create new solution"
+            description="Spin up a fresh unmanaged solution and publisher."
+          />
+          <ModeTile
+            active={solutionMode === "existing"}
+            onClick={() => setSolutionMode("existing")}
+            title="Use existing solution"
+            description="Place migrated tables into a solution you already have."
+          />
+        </div>
 
         {solutionsLoading && (
-          <div className={styles.loadingLine} role="status" aria-live="polite">
-            <Spinner size="tiny" />
-            Loading existing solutions...
+          <div className="flex items-center gap-2 text-xs text-ink-500 mb-2">
+            <Spinner size={12} /> Loading existing solutions…
           </div>
         )}
 
         {solutionMode === "new" ? (
-          <div className={styles.twoCol}>
-            <Field
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <Input
               label="Solution unique name"
               hint="Letters and digits, no spaces."
-              validationState={solError ? "error" : "none"}
-              validationMessage={solError ?? undefined}
-            >
-              <Input
-                value={solutionName}
-                onChange={(_e, d) => setSolutionName(d.value)}
-                placeholder={sanitizeSolutionName(jobName) || "ContosoCRM"}
-              />
-            </Field>
-            <Field
+              value={solutionName}
+              onChange={(e) => setSolutionName(e.target.value)}
+              placeholder={sanitizeSolutionName(jobName) || "ContosoCRM"}
+              error={solError ?? undefined}
+            />
+            <Input
               label="Publisher prefix"
               hint="2-8 lowercase letters."
-              validationState={prefixError ? "error" : "none"}
-              validationMessage={prefixError ?? undefined}
-            >
-              <Input
-                value={publisherPrefix}
-                onChange={(_e, d) => setPublisherPrefix(d.value.toLowerCase())}
-                placeholder={sanitizePrefix(jobName) || "contoso"}
-              />
-            </Field>
+              value={publisherPrefix}
+              onChange={(e) => setPublisherPrefix(e.target.value.toLowerCase())}
+              placeholder={sanitizePrefix(jobName) || "contoso"}
+              error={prefixError ?? undefined}
+            />
           </div>
         ) : (
-          <Field
+          <Select
             label="Existing solution"
             hint={
               solutionsLoading
@@ -222,66 +198,88 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
                   ? `Publisher prefix: ${selectedSolution.publisherPrefix}`
                   : undefined
             }
+            value={selectedSolutionUniqueName}
+            onChange={(e) => setSelectedSolutionUniqueName(e.target.value)}
+            disabled={solutionsLoading || solutions.length === 0}
           >
-            <Dropdown
-              value={selectedSolution ? `${selectedSolution.friendlyName} (${selectedSolution.uniqueName})` : ""}
-              selectedOptions={selectedSolutionUniqueName ? [selectedSolutionUniqueName] : []}
-              onOptionSelect={(_e, d) => setSelectedSolutionUniqueName(String(d.optionValue ?? ""))}
-              disabled={solutionsLoading || solutions.length === 0}
-              placeholder={solutionsLoading ? "Loading solutions..." : "Choose a solution"}
-            >
-              {solutions.map((solution) => (
-                <Option
-                  key={solution.solutionId}
-                  value={solution.uniqueName}
-                  text={`${solution.friendlyName} (${solution.uniqueName})`}
-                >
-                  {solution.friendlyName} ({solution.uniqueName})
-                </Option>
-              ))}
-            </Dropdown>
-          </Field>
+            {solutions.length === 0 && (
+              <option value="">{solutionsLoading ? "Loading…" : "No solutions found"}</option>
+            )}
+            {solutions.map((s) => (
+              <option key={s.solutionId} value={s.uniqueName}>
+                {s.friendlyName} ({s.uniqueName})
+              </option>
+            ))}
+          </Select>
         )}
 
         {duplicateSolution && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              A solution named <strong>{duplicateSolution.uniqueName}</strong> already exists.
-              Choose "Use existing solution" to target it, or enter a different unique name.
-            </MessageBarBody>
-          </MessageBar>
+          <Alert intent="warning" className="mt-3">
+            A solution named <strong>{duplicateSolution.uniqueName}</strong> already exists. Choose
+            "Use existing solution" to target it, or enter a different unique name.
+          </Alert>
         )}
         {solutionsError && (
-          <MessageBar intent="warning">
-            <MessageBarBody>
-              Existing solutions could not be loaded: {solutionsError}
-            </MessageBarBody>
-          </MessageBar>
+          <Alert intent="warning" className="mt-3">
+            Existing solutions could not be loaded: {solutionsError}
+          </Alert>
         )}
       </Card>
-      <MessageBar intent="info">
-        <MessageBarBody>
-          The local helper requires the 64-bit Microsoft Access Database Engine.
-          Forms, reports, macros, VBA, queries, attachments, and OLE objects
-          are NOT migrated — only tables, columns, relationships, and data.
-        </MessageBarBody>
-      </MessageBar>
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-      <div className={styles.actions}>
-        <Button
-          appearance="primary"
-          disabled={!canSubmit}
-          onClick={createJob}
-          icon={busy ? <Spinner size="tiny" /> : undefined}
-        >
+
+      <Alert intent="info" title="Before you start">
+        The local helper requires the 64-bit Microsoft Access Database Engine. Forms, reports,
+        macros, VBA, queries, attachments, and OLE objects are <strong>not</strong> migrated — only
+        tables, columns, relationships, and data.
+      </Alert>
+
+      <HelperInstallPanel />
+
+      {error && <Alert intent="error">{error}</Alert>}
+
+      <div className="flex justify-end">
+        <Button variant="primary" size="lg" disabled={!canSubmit} onClick={createJob} loading={busy}>
           {busy ? "Creating job…" : "Create job & continue"}
         </Button>
       </div>
     </div>
+  );
+}
+
+function ModeTile({
+  active,
+  onClick,
+  title,
+  description,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  description: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "text-left rounded-xl border-2 p-4 transition focus-ring",
+        active
+          ? "border-brand-500 bg-brand-50"
+          : "border-ink-200 bg-white hover:border-ink-300 hover:bg-ink-50",
+      )}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <div
+          className={cx(
+            "h-4 w-4 rounded-full border-2 flex items-center justify-center transition",
+            active ? "border-brand-500 bg-brand-500" : "border-ink-300",
+          )}
+        >
+          {active && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+        </div>
+        <div className="text-sm font-semibold text-ink-900">{title}</div>
+      </div>
+      <div className="text-xs text-ink-500 ml-6">{description}</div>
+    </button>
   );
 }
 

@@ -397,7 +397,7 @@ public sealed class AccessReader : IDisposable
         ArgumentNullException.ThrowIfNull(table);
         var quoted = QuoteIdentifier(table.Name);
         var skipCols = new HashSet<string>(
-            table.Columns.Where(c => c.DataType is "OleObject" or "Binary" or "Attachment").Select(c => c.Name),
+            table.Columns.Where(c => c.DataType is "OleObject" or "Binary" or "Attachment" or "Multivalue").Select(c => c.Name),
             StringComparer.OrdinalIgnoreCase);
 
         using var cmd = new OleDbCommand($"SELECT * FROM {quoted}", _conn);
@@ -489,8 +489,14 @@ public sealed class AccessReader : IDisposable
 
     private static string MapOleDbType(OleDbType t, int? maxLen) => t switch
     {
-        OleDbType.WChar or OleDbType.VarWChar or OleDbType.Char or OleDbType.VarChar =>
-            maxLen.HasValue && maxLen > 255 ? "Memo" : "Text",
+        // Access's TEXT type maps to (Var)WChar/(Var)Char in OLE DB and is
+        // always capped at 255 chars in Access itself, so it's always a
+        // single-line String in Dataverse. Long text uses LongVar*Char which
+        // OLE DB reports separately — that's the genuine Memo case.
+        // ACE OLE DB sometimes reports MaxLength=0/null for legitimately-
+        // sized TEXT columns; treating those as Memo gave us double-height
+        // textareas on form fields like LastName. Force Text here.
+        OleDbType.WChar or OleDbType.VarWChar or OleDbType.Char or OleDbType.VarChar => "Text",
         OleDbType.LongVarWChar or OleDbType.LongVarChar => "Memo",
         OleDbType.UnsignedTinyInt => "Byte",
         OleDbType.SmallInt or OleDbType.UnsignedSmallInt => "Integer",

@@ -132,15 +132,16 @@ public sealed class LookupResolver
                 patches.Add(new PatchOp(childGuid, parentGuid));
             }
 
-            var patched = await SendPatchBatchesAsync(
+            var patchResult = await SendPatchBatchesAsync(
                 childEntitySet, lookupLogical, parentEntitySet, patches, ct).ConfigureAwait(false);
 
-            totalUnresolved += unresolved;
+            totalUnresolved += unresolved + patchResult.Failed;
             var pct = (int)Math.Round(100.0 * (i + 1) / relevant.Count);
+            var totalRelationshipUnresolved = unresolved + patchResult.Failed;
             Report("lookup",
-                $"{rel.Name}: patched {patched}/{patches.Count}; unresolved {unresolved}.",
+                $"{rel.Name}: patched {patchResult.Patched}/{patches.Count}; unresolved {totalRelationshipUnresolved}.",
                 progress: pct,
-                severity: unresolved > 0 ? "warn" : null);
+                severity: totalRelationshipUnresolved > 0 ? "warn" : null);
         }
 
         Report("phase", $"Lookup resolution complete. {totalUnresolved} unresolved row(s).",
@@ -154,27 +155,80 @@ public sealed class LookupResolver
     /* ------------------------------------------------------------------ */
 
     private sealed record PatchOp(Guid ChildId, Guid ParentId);
+    private sealed record PatchBatchResult(int Patched, int Failed)
+    {
+        public static PatchBatchResult operator +(PatchBatchResult left, PatchBatchResult right)
+            => new(left.Patched + right.Patched, left.Failed + right.Failed);
+    }
 
-    private async Task<int> SendPatchBatchesAsync(
+    private sealed class PatchBatchFailedException : Exception
+    {
+        public int Status { get; }
+        public string Body { get; }
+
+        public PatchBatchFailedException(int status, string body)
+            : base($"Dataverse $batch (PATCH) returned HTTP {status}: {Truncate(body, 800)}")
+        {
+            Status = status;
+            Body = body;
+        }
+    }
+
+    private async Task<PatchBatchResult> SendPatchBatchesAsync(
         string childEntitySet,
         string lookupLogical,
         string parentEntitySet,
         List<PatchOp> ops,
         CancellationToken ct)
     {
-        var patched = 0;
+        var result = new PatchBatchResult(0, 0);
         for (var offset = 0; offset < ops.Count; offset += DefaultBatchSize)
         {
             ct.ThrowIfCancellationRequested();
             var chunk = ops.GetRange(offset, Math.Min(DefaultBatchSize, ops.Count - offset));
-            var ok = await SendOnePatchBatchAsync(childEntitySet, lookupLogical, parentEntitySet, chunk, ct)
+            var batchResult = await SendPatchChunkWithFallbackAsync(childEntitySet, lookupLogical, parentEntitySet, chunk, ct)
                 .ConfigureAwait(false);
-            patched += ok;
+            result += batchResult;
         }
-        return patched;
+        return result;
     }
 
-    private async Task<int> SendOnePatchBatchAsync(
+    private async Task<PatchBatchResult> SendPatchChunkWithFallbackAsync(
+        string childEntitySet,
+        string lookupLogical,
+        string parentEntitySet,
+        List<PatchOp> ops,
+        CancellationToken ct)
+    {
+        try
+        {
+            return await SendOnePatchBatchAsync(childEntitySet, lookupLogical, parentEntitySet, ops, ct)
+                .ConfigureAwait(false);
+        }
+        catch (PatchBatchFailedException ex) when (ops.Count > 1)
+        {
+            Report("log",
+                $"Lookup PATCH batch for {childEntitySet}.{lookupLogical} failed with HTTP {ex.Status}; retrying in smaller chunks to isolate stale rows.",
+                severity: "warn");
+            var midpoint = ops.Count / 2;
+            var left = ops.GetRange(0, midpoint);
+            var right = ops.GetRange(midpoint, ops.Count - midpoint);
+            var leftResult = await SendPatchChunkWithFallbackAsync(childEntitySet, lookupLogical, parentEntitySet, left, ct)
+                .ConfigureAwait(false);
+            var rightResult = await SendPatchChunkWithFallbackAsync(childEntitySet, lookupLogical, parentEntitySet, right, ct)
+                .ConfigureAwait(false);
+            return leftResult + rightResult;
+        }
+        catch (PatchBatchFailedException ex)
+        {
+            Report("log",
+                $"Lookup PATCH skipped one row for {childEntitySet}.{lookupLogical}: HTTP {ex.Status} {ExtractBatchErrorMessage(ex.Body)}",
+                severity: "warn");
+            return new PatchBatchResult(0, 1);
+        }
+    }
+
+    private async Task<PatchBatchResult> SendOnePatchBatchAsync(
         string childEntitySet,
         string lookupLogical,
         string parentEntitySet,
@@ -226,7 +280,7 @@ public sealed class LookupResolver
             Report("log", $"Lookup PATCH batch had {failures.Count} failure(s): {string.Join(" | ", failures.Take(3))}",
                 severity: "warn");
         }
-        return ok;
+        return new PatchBatchResult(ok, failures.Count);
     }
 
     private async Task<string> SendBatchWithRetryAsync(string boundary, string payload, CancellationToken ct)
@@ -264,11 +318,40 @@ public sealed class LookupResolver
             if (!resp.IsSuccessStatusCode)
             {
                 var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
-                throw new InvalidOperationException(
-                    $"Dataverse $batch (PATCH) returned HTTP {(int)resp.StatusCode}: {Truncate(body, 800)}");
+                throw new PatchBatchFailedException((int)resp.StatusCode, body);
             }
             return await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
+    }
+
+    private static string ExtractBatchErrorMessage(string body)
+    {
+        var idx = body.IndexOf("{\"error\"", StringComparison.Ordinal);
+        if (idx >= 0)
+        {
+            var depth = 0;
+            for (var i = idx; i < body.Length; i++)
+            {
+                if (body[i] == '{') depth++;
+                else if (body[i] == '}')
+                {
+                    depth--;
+                    if (depth == 0)
+                    {
+                        try
+                        {
+                            using var doc = JsonDocument.Parse(body.Substring(idx, i - idx + 1));
+                            var err = doc.RootElement.GetProperty("error");
+                            var code = err.TryGetProperty("code", out var c) ? c.GetString() : null;
+                            var msg = err.TryGetProperty("message", out var m) ? m.GetString() : null;
+                            return $"{code} {msg}".Trim();
+                        }
+                        catch (JsonException) { break; }
+                    }
+                }
+            }
+        }
+        return Truncate(body, 300);
     }
 
     private static int ComputeRetryAfterMs(HttpResponseMessage resp, int attempt)

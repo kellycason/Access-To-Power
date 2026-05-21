@@ -22,16 +22,69 @@ export interface TableValidation {
   dataverseTable: string;
   expectedRows: number;
   actualRows: number;
+  rejectedRows: number;
   delta: number;
   status: "ok" | "mismatch" | "error";
   message?: string;
+  /** "ColumnName: reason" entries for columns whose data was not migrated. */
+  droppedColumns: string[];
+  /** Warning-level issues from the source manifest (precision, truncation, etc.). */
+  warnings: string[];
 }
 
 export interface ValidationReport {
   tables: TableValidation[];
   totalExpected: number;
   totalActual: number;
+  totalRejected: number;
+  unresolvedLookups: number;
   overallStatus: "ok" | "mismatch" | "error";
+  /** ISO timestamp when the helper finalized this report, if available. */
+  capturedAt?: string;
+}
+
+/**
+ * Parse the PascalCase JSON the C# helper writes to the migration-report.json
+ * annotation. Returns null if the shape doesn't look right so the caller can
+ * fall back to a synthetic report.
+ */
+export function parseHelperMigrationReport(raw: unknown): ValidationReport | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const tablesRaw = r.Tables;
+  if (!Array.isArray(tablesRaw)) return null;
+  const tables: TableValidation[] = tablesRaw.map((t) => {
+    const row = t as Record<string, unknown>;
+    const expected = Number(row.ExpectedRows ?? 0);
+    const actual = Number(row.ActualRows ?? 0);
+    const rejected = Number(row.RejectedRows ?? 0);
+    const status = String(row.Status ?? "ok");
+    return {
+      accessTable: String(row.AccessTable ?? ""),
+      dataverseTable: String(row.DataverseTable ?? ""),
+      expectedRows: expected,
+      actualRows: actual,
+      rejectedRows: rejected,
+      delta: actual - expected,
+      status: status === "ok" || status === "error" ? status : "mismatch",
+      message: typeof row.Message === "string" && row.Message ? row.Message : undefined,
+      droppedColumns: Array.isArray(row.DroppedColumns)
+        ? (row.DroppedColumns as unknown[]).map(String)
+        : [],
+      warnings: Array.isArray(row.Warnings) ? (row.Warnings as unknown[]).map(String) : [],
+    };
+  });
+  const overallStatus = String(r.OverallStatus ?? "ok");
+  return {
+    tables,
+    totalExpected: Number(r.TotalExpected ?? tables.reduce((s, t) => s + t.expectedRows, 0)),
+    totalActual: Number(r.TotalActual ?? tables.reduce((s, t) => s + t.actualRows, 0)),
+    totalRejected: Number(r.TotalRejected ?? tables.reduce((s, t) => s + t.rejectedRows, 0)),
+    unresolvedLookups: Number(r.UnresolvedLookups ?? 0),
+    overallStatus:
+      overallStatus === "ok" || overallStatus === "error" ? overallStatus : "mismatch",
+    capturedAt: typeof r.CapturedAt === "string" ? r.CapturedAt : undefined,
+  };
 }
 
 export async function validateMigration(opts: ValidateOptions): Promise<ValidationReport> {
@@ -64,9 +117,12 @@ export async function validateMigration(opts: ValidateOptions): Promise<Validati
       dataverseTable: tm.dataverseSchemaName,
       expectedRows: expected,
       actualRows: actual,
+      rejectedRows: 0,
       delta,
       status,
       message,
+      droppedColumns: [],
+      warnings: [],
     };
     results.push(result);
 
@@ -91,7 +147,14 @@ export async function validateMigration(opts: ValidateOptions): Promise<Validati
     severity: overallStatus === "ok" ? undefined : overallStatus === "mismatch" ? "warn" : "error",
   });
 
-  return { tables: results, totalExpected, totalActual, overallStatus };
+  return {
+    tables: results,
+    totalExpected,
+    totalActual,
+    totalRejected: 0,
+    unresolvedLookups: 0,
+    overallStatus,
+  };
 }
 
 async function count(envUrl: string, entitySet: string, signal?: AbortSignal): Promise<number> {

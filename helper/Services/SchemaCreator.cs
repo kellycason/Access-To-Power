@@ -88,7 +88,20 @@ public sealed class SchemaCreator
                 if (f.Action != "Map") continue;
                 if (f.IsAlternateKey && IsPrimaryKey(t, f)) continue;
                 if (f.DataverseType == "Lookup") continue;
-                if (!string.IsNullOrEmpty(t.PrimaryNameAccessColumn) && f.AccessColumn == t.PrimaryNameAccessColumn) continue;
+                // Only skip the column if it was actually used as the primary
+                // name AND is text-like. If CreateTableAsync's backstop
+                // overrode a non-Text/Memo PrimaryNameAccessColumn with the
+                // synthetic <prefix>_name, the original column (e.g. an
+                // Integer "AuthorOrder") still needs to be created as a
+                // regular attribute — otherwise row inserts blow up with
+                // "property does not exist on type".
+                if (!string.IsNullOrEmpty(t.PrimaryNameAccessColumn)
+                    && string.Equals(f.AccessColumn, t.PrimaryNameAccessColumn, StringComparison.OrdinalIgnoreCase)
+                    && (string.Equals(f.DataverseType, "String", StringComparison.Ordinal)
+                        || string.Equals(f.DataverseType, "Memo", StringComparison.Ordinal)))
+                {
+                    continue;
+                }
                 await CreateAttributeIfMissingAsync(t.DataverseSchemaName, f, solutionUniqueName, ct).ConfigureAwait(false);
             }
         }
@@ -224,13 +237,71 @@ public sealed class SchemaCreator
         var exists = await _dv.ExistsAsync($"EntityDefinitions(LogicalName='{logical}')?$select=LogicalName", ct).ConfigureAwait(false);
         if (exists)
         {
-            Report("log", $"Entity {logical} already exists.");
+            // Hard fail when the migration plan says "create new" but the table already lives in
+            // this environment. Silently reusing it would mix Access data with whatever is already
+            // in there (we have hit this before — leftover acp_order rows from prior runs got
+            // augmented instead of replaced, producing duplicate / unresolved lookups).
+            // The end user must either pick "Use existing table" in the Map step or choose a
+            // different schema name / publisher prefix.
+            var modeIsExisting = string.Equals(t.TargetMode, "existing", StringComparison.OrdinalIgnoreCase);
+            if (!modeIsExisting)
+            {
+                throw new InvalidOperationException(
+                    $"Table '{logical}' already exists in this Dataverse environment, but the migration plan " +
+                    $"says to create it as a new table for Access table '{t.AccessTable}'. " +
+                    $"Go back to the Map step and either choose 'Use existing table' to map into '{logical}', " +
+                    $"or pick a different schema name / publisher prefix so a fresh table can be created.");
+            }
+            Report("log", $"Entity {logical} already exists (use-existing mode).");
             return;
         }
 
-        var primaryNameField = t.Fields.FirstOrDefault(f => f.AccessColumn == t.PrimaryNameAccessColumn) ?? t.Fields.FirstOrDefault();
+        // Pick the primary name field. Must be a non-PK, non-Lookup field
+        // mapped to a String/Memo/etc. — picking a Lookup would create the
+        // entity with a String attribute at the same logical name as the
+        // intended FK lookup, blocking Pass 3 from creating the relationship
+        // ("already exists" → no lookup created → row patch fails with
+        // "undeclared property"). Junction tables (e.g. BookAuthors with only
+        // ID + BookID + AuthorID) typically end up with no good candidate;
+        // fall back to a synthetic "<prefix>_name" attribute in that case.
+        FieldMapping? primaryNameField = null;
+        if (!string.IsNullOrEmpty(t.PrimaryNameAccessColumn))
+        {
+            primaryNameField = t.Fields.FirstOrDefault(f =>
+                string.Equals(f.AccessColumn, t.PrimaryNameAccessColumn, StringComparison.OrdinalIgnoreCase));
+        }
+        if (primaryNameField is { DataverseType: "Lookup" })
+        {
+            // Defensive: planBuilder should already filter FKs out of the
+            // primary-name selection, but make sure we don't honor it here.
+            Report("log", $"Primary name '{primaryNameField.AccessColumn}' is a Lookup column on '{t.AccessTable}'; using '{prefix}_name' instead.", severity: "warn");
+            primaryNameField = null;
+        }
+        if (primaryNameField is not null
+            && !string.Equals(primaryNameField.DataverseType, "String", StringComparison.Ordinal)
+            && !string.Equals(primaryNameField.DataverseType, "Memo", StringComparison.Ordinal))
+        {
+            // Defensive: Dataverse's primary-name attribute is always a String.
+            // If the plan somehow selected a non-text column (Integer, Date,
+            // Boolean, etc.), every row insert would fail with "Cannot convert
+            // <type> to String". Fall back to a synthetic name column.
+            Report("log", $"Primary name '{primaryNameField.AccessColumn}' is a {primaryNameField.DataverseType} column on '{t.AccessTable}'; using '{prefix}_name' instead.", severity: "warn");
+            primaryNameField = null;
+        }
         var primaryNameSchema = primaryNameField?.DataverseSchemaName ?? $"{prefix}_name";
         var primaryNameDisplay = primaryNameField?.DataverseDisplayName ?? "Name";
+
+        // Dataverse auto-creates the entity primary key as `${logical}id`.
+        // If the chosen primary name field collides with that, fall back to
+        // `${prefix}_name` so the entity create body doesn't double-declare
+        // the same column (SQL error 0x80040216).
+        var reservedPkLogical = $"{logical}id";
+        if (string.Equals(primaryNameSchema.ToLowerInvariant(), reservedPkLogical, StringComparison.Ordinal))
+        {
+            Report("log", $"Primary name field '{primaryNameSchema}' collides with auto-generated PK; using '{prefix}_name' instead.");
+            primaryNameSchema = $"{prefix}_name";
+            primaryNameDisplay = "Name";
+        }
 
         var body = new JsonObject
         {
@@ -271,6 +342,16 @@ public sealed class SchemaCreator
     {
         var entityLogical = entitySchema.ToLowerInvariant();
         var attrLogical = f.DataverseSchemaName.ToLowerInvariant();
+        // Dataverse auto-creates `${entityLogical}id` as the entity's primary
+        // key. Attempting to create another attribute with that exact logical
+        // name fails with SQL error 0x80040216 ("Column name ... specified
+        // more than once"). Skip with a warning so the migration continues —
+        // the original Access value is still recoverable via the idmap.
+        if (string.Equals(attrLogical, $"{entityLogical}id", StringComparison.Ordinal))
+        {
+            Report("column", $"Skipping {entityLogical}.{attrLogical} — reserved for auto-generated primary key. Update plan to use a different schema name for column '{f.AccessColumn}'.");
+            return;
+        }
         var existsPath = $"EntityDefinitions(LogicalName='{entityLogical}')/Attributes(LogicalName='{attrLogical}')?$select=LogicalName";
         if (await _dv.ExistsAsync(existsPath, ct).ConfigureAwait(false))
         {
@@ -298,7 +379,7 @@ public sealed class SchemaCreator
                 ["LogicalName"] = attrLogical,
                 ["DisplayName"] = Label(f.DataverseDisplayName),
                 ["RequiredLevel"] = new JsonObject { ["Value"] = reqLevel },
-                ["MaxLength"] = 100000,
+                ["MaxLength"] = 1048576,
                 ["Format"] = "TextArea",
             },
             "Integer" => new JsonObject
@@ -391,6 +472,7 @@ public sealed class SchemaCreator
                     ["FalseOption"] = new JsonObject { ["Value"] = 0, ["Label"] = Label("No") },
                 },
             },
+            "Choice" => BuildChoiceAttribute(f, attrLogical, reqLevel),
             _ => null,
         };
 
@@ -417,6 +499,60 @@ public sealed class SchemaCreator
     }
 
     /* --------- lookups --------- */
+
+    /// <summary>
+    /// Builds an inline-OptionSet PicklistAttributeMetadata payload for a
+    /// Choice column. The plan carries the materialized integer values (so
+    /// the data loader can translate row labels to ints deterministically).
+    /// If the plan didn't materialize options we emit a placeholder option
+    /// so the attribute is still created — empty option sets are rejected
+    /// by Dataverse.
+    /// </summary>
+    private JsonObject BuildChoiceAttribute(FieldMapping f, string attrLogical, string reqLevel)
+    {
+        var options = new JsonArray();
+        if (f.ChoiceOptions is { Count: > 0 })
+        {
+            foreach (var opt in f.ChoiceOptions)
+            {
+                options.Add(new JsonObject
+                {
+                    ["@odata.type"] = "Microsoft.Dynamics.CRM.OptionMetadata",
+                    ["Value"] = opt.Value,
+                    ["Label"] = Label(string.IsNullOrWhiteSpace(opt.Label) ? $"Option {opt.Value}" : opt.Label),
+                });
+            }
+        }
+        else
+        {
+            // Defensive fallback: Dataverse rejects an OptionSet with zero
+            // options. Emit a single placeholder so the column still creates;
+            // the user can extend the option set post-migration in the maker
+            // portal if a value list slips through without labels.
+            options.Add(new JsonObject
+            {
+                ["@odata.type"] = "Microsoft.Dynamics.CRM.OptionMetadata",
+                ["Value"] = 100000000,
+                ["Label"] = Label("(unspecified)"),
+            });
+        }
+
+        return new JsonObject
+        {
+            ["@odata.type"] = "Microsoft.Dynamics.CRM.PicklistAttributeMetadata",
+            ["SchemaName"] = f.DataverseSchemaName,
+            ["LogicalName"] = attrLogical,
+            ["DisplayName"] = Label(f.DataverseDisplayName),
+            ["RequiredLevel"] = new JsonObject { ["Value"] = reqLevel },
+            ["OptionSet"] = new JsonObject
+            {
+                ["@odata.type"] = "Microsoft.Dynamics.CRM.OptionSetMetadata",
+                ["IsGlobal"] = false,
+                ["OptionSetType"] = "Picklist",
+                ["Options"] = options,
+            },
+        };
+    }
 
     private async Task CreateLookupIfMissingAsync(
         string childEntity, string parentEntity, string lookupSchema, string displayName,

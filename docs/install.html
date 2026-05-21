@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>How to install Access to Power</title>
+<style>
+  @page { size: Letter; margin: 0.6in 0.7in; }
+  :root {
+    --blue: #2563eb;
+    --blue-dark: #1d4ed8;
+    --orange: #ea580c;
+    --orange-dark: #c2410c;
+    --green: #16a34a;
+    --yellow: #d97706;
+    --red: #dc2626;
+    --slate-50: #f8fafc;
+    --slate-100: #f1f5f9;
+    --slate-200: #e2e8f0;
+    --slate-300: #cbd5e1;
+    --slate-500: #64748b;
+    --slate-700: #334155;
+    --slate-900: #0f172a;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+    color: var(--slate-900);
+    font-size: 11.5pt;
+    line-height: 1.55;
+  }
+  body { padding: 0; }
+
+  /* Cover */
+  .cover {
+    text-align: center;
+    padding: 1.2in 0.4in 0.6in;
+    page-break-after: always;
+    background: linear-gradient(180deg, #eff6ff 0%, #ffffff 100%);
+  }
+  .cover-logo {
+    display: inline-block;
+    font-size: 72px;
+    line-height: 1;
+    margin-bottom: 24px;
+  }
+  .cover h1 {
+    font-size: 38pt;
+    line-height: 1.1;
+    margin: 0 0 8px;
+    color: var(--slate-900);
+    letter-spacing: -0.02em;
+  }
+  .cover .tagline {
+    font-size: 14pt;
+    color: var(--slate-500);
+    margin: 0 0 48px;
+  }
+  .cover-pillbox {
+    display: inline-flex;
+    gap: 12px;
+    margin: 36px 0 24px;
+    flex-wrap: wrap;
+    justify-content: center;
+  }
+  .pill {
+    display: inline-block;
+    padding: 8px 16px;
+    border-radius: 999px;
+    font-size: 10pt;
+    font-weight: 600;
+    border: 1px solid var(--slate-300);
+    background: #fff;
+  }
+  .pill.blue { color: var(--blue-dark); border-color: #bfdbfe; background: #eff6ff; }
+  .pill.orange { color: var(--orange-dark); border-color: #fed7aa; background: #fff7ed; }
+  .cover .meta {
+    margin-top: 64px;
+    font-size: 10pt;
+    color: var(--slate-500);
+  }
+
+  /* Body */
+  main { padding: 0 0.1in; }
+
+  h1 {
+    font-size: 22pt;
+    margin: 36px 0 6px;
+    padding-bottom: 8px;
+    border-bottom: 3px solid var(--slate-200);
+    color: var(--slate-900);
+    page-break-after: avoid;
+  }
+  h1.part {
+    border-bottom: 4px solid var(--blue);
+    padding: 12px 16px;
+    background: linear-gradient(90deg, #eff6ff, #ffffff);
+    border-radius: 6px 6px 0 0;
+    margin-top: 0;
+    page-break-before: always;
+  }
+  h1.part.orange {
+    border-bottom-color: var(--orange);
+    background: linear-gradient(90deg, #fff7ed, #ffffff);
+  }
+  h2 {
+    font-size: 14pt;
+    margin: 28px 0 8px;
+    color: var(--slate-900);
+    page-break-after: avoid;
+  }
+  h2.step {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  h2.step .step-num {
+    flex: 0 0 32px;
+    height: 32px;
+    border-radius: 50%;
+    background: var(--blue);
+    color: #fff;
+    font-weight: 700;
+    font-size: 13pt;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .orange-section h2.step .step-num { background: var(--orange); }
+
+  p { margin: 8px 0; }
+  strong { color: var(--slate-900); }
+  code {
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    background: var(--slate-100);
+    padding: 1px 6px;
+    border-radius: 4px;
+    font-size: 0.92em;
+    color: var(--slate-900);
+  }
+  pre {
+    background: #0f172a;
+    color: #e2e8f0;
+    padding: 14px 16px;
+    border-radius: 8px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 9.5pt;
+    line-height: 1.45;
+    overflow-x: auto;
+    page-break-inside: avoid;
+  }
+  pre code { background: transparent; color: inherit; padding: 0; }
+
+  ol, ul { padding-left: 22px; }
+  li { margin: 4px 0; }
+
+  /* Checklist */
+  ul.checklist { list-style: none; padding-left: 4px; }
+  ul.checklist li {
+    position: relative;
+    padding-left: 30px;
+    margin: 10px 0;
+  }
+  ul.checklist li::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    top: 3px;
+    width: 18px;
+    height: 18px;
+    border: 2px solid var(--slate-300);
+    border-radius: 4px;
+    background: #fff;
+  }
+
+  /* Callouts */
+  .callout {
+    border-left: 4px solid;
+    padding: 12px 16px;
+    border-radius: 0 8px 8px 0;
+    margin: 14px 0;
+    page-break-inside: avoid;
+  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout.tip { background: #ecfdf5; border-color: var(--green); }
+  .callout.info { background: #eff6ff; border-color: var(--blue); }
+  .callout.warn { background: #fffbeb; border-color: var(--yellow); }
+  .callout.success { background: #f0fdf4; border-color: var(--green); }
+  .callout.danger { background: #fef2f2; border-color: var(--red); }
+  .callout-title {
+    font-weight: 700;
+    margin-right: 4px;
+  }
+
+  /* Table */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 14px 0;
+    font-size: 10.5pt;
+    page-break-inside: avoid;
+  }
+  thead th {
+    background: var(--slate-100);
+    color: var(--slate-700);
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 2px solid var(--slate-300);
+    font-size: 10pt;
+  }
+  tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--slate-200);
+    vertical-align: top;
+  }
+  tbody tr:nth-child(even) td { background: var(--slate-50); }
+
+  hr {
+    border: none;
+    border-top: 1px solid var(--slate-200);
+    margin: 36px 0;
+  }
+
+  .toc {
+    background: var(--slate-50);
+    border: 1px solid var(--slate-200);
+    border-radius: 8px;
+    padding: 18px 24px;
+    margin: 16px 0 32px;
+  }
+  .toc h2 {
+    margin-top: 0;
+    font-size: 12pt;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--slate-500);
+  }
+  .toc ol { margin: 0; padding-left: 22px; }
+  .toc li { margin: 4px 0; }
+  .toc .blue-text { color: var(--blue-dark); font-weight: 600; }
+  .toc .orange-text { color: var(--orange-dark); font-weight: 600; }
+</style>
+</head>
+<body>
+
+<section class="cover">
+  <div class="cover-logo">📦</div>
+  <h1>How to install<br/>Access to Power</h1>
+  <p class="tagline">A simple, step-by-step guide</p>
+
+  <div class="cover-pillbox">
+    <span class="pill blue">🟦 Part 1 — Install the App (cloud)</span>
+    <span class="pill orange">🟧 Part 2 — Install the Helper (PC)</span>
+  </div>
+
+  <p class="meta">⏱️ About 15 minutes &nbsp;·&nbsp; 🔑 Power Apps Premium + Windows PC</p>
+</section>
+
+<main>
+
+<p>Welcome! This guide walks you through getting <strong>Access to Power</strong> up and
+running. You'll do this <strong>once</strong>, then you can migrate as many Access
+databases as you want.</p>
+
+<p>There are <strong>two things</strong> to install:</p>
+
+<ol>
+  <li>🟦 <strong>The app</strong> — lives in Power Platform (the cloud). Everyone who uses the app shares this.</li>
+  <li>🟧 <strong>The helper</strong> — a tiny program that lives on <strong>your own Windows PC</strong>.
+    It reads the Access file off your hard drive (because a web browser can't).</li>
+</ol>
+
+<div class="callout info">
+  <p>⏱️ <strong>Total time:</strong> about 15 minutes.<br/>
+  🔑 <strong>What you need:</strong> a Power Apps license, a Dataverse environment, and a Windows PC.</p>
+</div>
+
+<div class="toc">
+  <h2>What's in this guide</h2>
+  <ol>
+    <li>Before you start — the checklist</li>
+    <li class="blue-text">Part 1 — Install the app (the cloud part)</li>
+    <li class="orange-text">Part 2 — Install the helper (the PC part)</li>
+    <li>Try it out</li>
+    <li>Help! Something went wrong</li>
+    <li>How to uninstall</li>
+  </ol>
+</div>
+
+<h1>Before you start — the checklist</h1>
+
+<p>Tick these off first. If anything's missing, grab it before going further.</p>
+
+<ul class="checklist">
+  <li>A <strong>Power Apps Premium</strong> license (the app uses Code Apps, which is a premium feature).</li>
+  <li>A <strong>Dataverse environment</strong> you can create tables in. If you're not sure, ask your
+    Power Platform admin: <em>"Can you give me a Dataverse environment where I'm a System
+    Customizer or System Administrator?"</em></li>
+  <li>A <strong>Windows PC</strong> (Windows 10 or Windows 11). The helper does not run on Mac or Linux.</li>
+  <li>The <strong>64-bit Microsoft Access Database Engine</strong>. This is a free download from
+    Microsoft. Without it the helper can't read <code>.accdb</code> files.<br/>
+    👉 Search the web for <strong>"Microsoft Access Database Engine 2016 Redistributable"</strong> and
+    grab the <strong><code>AccessDatabaseEngine_X64.exe</code></strong> version.</li>
+  <li>The <strong>Access to Power solution file</strong> (<code>AccessToPower_x_x_x_managed.zip</code>) —
+    your admin or whoever sent you here should have given you this file.</li>
+  <li>The <strong>helper installer zip</strong> (<code>AccessToPowerHelper-x.x.x-win-x64.zip</code>) — same source.</li>
+</ul>
+
+<div class="callout info">
+  <p><span class="callout-title">❓ What's a Dataverse environment?</span> Think of it like a database in
+  the cloud where Power Apps stores its stuff. Your company probably already has one (or
+  several). You need permission to add new tables to it.</p>
+</div>
+
+<h1 class="part">🟦 Part 1 — Install the app (the cloud part)</h1>
+
+<p>This puts the <strong>Access to Power</strong> app into your Power Platform environment so you
+(and anyone else in your org) can open it from the browser.</p>
+
+<h2 class="step"><span class="step-num">1</span> Open the Power Platform Admin Center</h2>
+<ol>
+  <li>Open your web browser.</li>
+  <li>Go to 👉 <strong>https://admin.powerplatform.microsoft.com</strong></li>
+  <li>Sign in with your work account.</li>
+</ol>
+
+<h2 class="step"><span class="step-num">2</span> Pick your environment</h2>
+<ol>
+  <li>On the left side, click <strong>Environments</strong>.</li>
+  <li>Click the <strong>name</strong> of the environment you want to install the app into.
+    (If you only see one, that's the one.)</li>
+</ol>
+
+<h2 class="step"><span class="step-num">3</span> Import the solution</h2>
+<ol>
+  <li>Near the top of the page, click <strong>Resources</strong> ▸ <strong>Solutions</strong>.
+    <em>(Or click the <strong>Solutions</strong> tile on the environment overview.)</em></li>
+  <li>Click the <strong>Import solution</strong> button at the top.</li>
+  <li>Click <strong>Browse</strong> and pick the file:
+    <strong><code>AccessToPower_x_x_x_managed.zip</code></strong> (the one you got from your admin).</li>
+  <li>Click <strong>Next</strong>.</li>
+  <li>Click <strong>Next</strong> again on any "connections" page — there are none to set up here.</li>
+  <li>Click <strong>Import</strong>.</li>
+  <li>Wait. ⏳ This usually takes <strong>2–5 minutes</strong>. Don't close the tab. When it's done you'll
+    see a green check.</li>
+</ol>
+
+<div class="callout success">
+  <p>✅ <strong>You'll know it worked when</strong> you see "Access to Power" in your solutions list
+  with a green "Managed" tag.</p>
+</div>
+
+<h2 class="step"><span class="step-num">4</span> Open the app once to set it up</h2>
+<ol>
+  <li>Still in the admin center, click on the <strong>Access to Power</strong> solution you just imported.</li>
+  <li>Find the item called <strong>Access to Power</strong> with type <strong>Code App</strong>
+    (it has a little <code>&lt;/&gt;</code> icon).</li>
+  <li>Click it. A new tab opens with the app.</li>
+  <li><strong>First time only:</strong> the browser will ask permission to use your Microsoft account.
+    Click <strong>Allow</strong>.</li>
+</ol>
+
+<div class="callout tip">
+  <p>🎉 <strong>The app is installed!</strong> Now we need the helper.</p>
+</div>
+
+<section class="orange-section">
+
+<h1 class="part orange">🟧 Part 2 — Install the helper (the PC part)</h1>
+
+<p>The helper is a small Windows program. It does <strong>one</strong> thing: when the app
+asks it to, it opens your Access file and uploads what's inside.</p>
+
+<div class="callout info">
+  <p>🔐 <strong>Is this safe?</strong> Yes. The helper runs as <strong>you</strong>, only when
+  <strong>you</strong> open the app, and only reads files <strong>you</strong> point it at. It doesn't
+  run in the background. It doesn't phone home. It signs into the same Microsoft account you
+  already use.</p>
+</div>
+
+<h2 class="step"><span class="step-num">1</span> Install the Access Database Engine (one time)</h2>
+
+<div class="callout tip">
+  <p>⏭️ <strong>Skip this step</strong> if you already have Microsoft Access installed on this PC, or
+  if your IT department has already pushed the database engine to your machine.</p>
+</div>
+
+<ol>
+  <li>Download <strong><code>AccessDatabaseEngine_X64.exe</code></strong> from Microsoft's website.</li>
+  <li>Double-click it.</li>
+  <li>Click <strong>Next</strong>, accept the license, click <strong>Install</strong>.</li>
+  <li>When it says "Setup Completed Successfully," click <strong>OK</strong>.</li>
+</ol>
+
+<h2 class="step"><span class="step-num">2</span> Unzip the helper</h2>
+<ol>
+  <li>Find the file <strong><code>AccessToPowerHelper-x.x.x-win-x64.zip</code></strong> (the one your admin sent you).</li>
+  <li><strong>Right-click</strong> the zip file.</li>
+  <li>Choose <strong>Extract All...</strong> in the menu that pops up.</li>
+  <li>Click <strong>Extract</strong>. Windows makes a new folder next to the zip with the same name.</li>
+  <li>Open that new folder. You should see files like:
+    <ul>
+      <li><code>AccessToPowerHelper.exe</code></li>
+      <li><code>install-helper.ps1</code></li>
+      <li><code>uninstall-helper.ps1</code></li>
+      <li><code>README.md</code></li>
+    </ul>
+  </li>
+</ol>
+
+<h2 class="step"><span class="step-num">3</span> Run the installer</h2>
+
+<p>This is the only part that uses a tiny bit of PowerShell. <strong>It's just two clicks and one
+paste.</strong> Follow exactly:</p>
+
+<ol>
+  <li>In the folder from step 2, <strong>hold Shift</strong> and <strong>right-click</strong> in some
+    empty space inside the folder (not on a file).</li>
+  <li>Choose <strong>Open in Terminal</strong> (or <strong>Open PowerShell window here</strong> on older Windows).
+    A black-or-blue window opens.</li>
+  <li><strong>Copy</strong> the line below by clicking it once:
+<pre><code>powershell.exe -ExecutionPolicy Bypass -File .\install-helper.ps1</code></pre>
+  </li>
+  <li><strong>Paste</strong> it into the black window. (Right-click in the window, or press <strong>Ctrl+V</strong>.)</li>
+  <li>Press <strong>Enter</strong>.</li>
+</ol>
+
+<p>The installer prints a few lines like <code>==&gt; Installing helper to ...</code> and finishes with:</p>
+
+<pre><code>Access-To-Power Helper installed successfully.</code></pre>
+
+<div class="callout success">
+  <p>✅ <strong>You'll know it worked when</strong> you see the green "installed successfully" message.
+  You can close the black window now.</p>
+</div>
+
+<div class="callout warn">
+  <p>⚠️ <strong>If you see a yellow warning</strong> that says "Microsoft ACE OLEDB provider was not
+  detected" — go back to Step 1 and install the Access Database Engine. The helper installed,
+  but it won't be able to read <code>.accdb</code> files until that engine is on your PC.</p>
+</div>
+
+<h2 class="step"><span class="step-num">4</span> That's it!</h2>
+
+<p>The helper is now installed in <code>C:\Users\&lt;you&gt;\AppData\Local\AccessToPower\Helper</code>.
+You'll <strong>never need to open it manually</strong> — the app will pop it open for you when it
+needs to read a file.</p>
+
+<p>If you want to verify, look in <strong>Settings ▸ Apps ▸ Installed apps</strong> and search for
+<strong>"Access-To-Power Helper"</strong>. It should be in the list.</p>
+
+</section>
+
+<h1>✅ Try it out</h1>
+
+<ol>
+  <li>Go back to the Power Platform admin center.</li>
+  <li>Open the <strong>Access to Power</strong> app (same way as Step 4 in Part 1).</li>
+  <li>Click <strong>New Migration</strong>.</li>
+  <li>When the app asks you to pick your <code>.accdb</code> file, your browser may show a popup
+    asking <em>"Open AccessToPowerHelper?"</em> — click <strong>Open</strong> (and tick "Always allow…" if
+    you don't want to be asked again).</li>
+  <li>The helper opens, you sign in once with your work account, and pick your <code>.accdb</code>.</li>
+</ol>
+
+<div class="callout tip">
+  <p>🎊 <strong>You're done!</strong> Follow the wizard from there.</p>
+</div>
+
+<h1>🆘 Help! Something went wrong</h1>
+
+<table>
+  <thead>
+    <tr>
+      <th style="width: 40%;">What you see</th>
+      <th>What to do</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>"This page can't be displayed"</strong> when you click an <code>accesstopower://</code> link</td>
+      <td>The helper isn't installed yet, or didn't register. Re-run <strong>Part 2 ▸ Step 3</strong>.</td>
+    </tr>
+    <tr>
+      <td><strong>"Solution import failed"</strong> in Part 1</td>
+      <td>Make sure you're a System Customizer or System Administrator on that environment.
+        If you are, try once more — sometimes the platform is just busy.</td>
+    </tr>
+    <tr>
+      <td>Yellow <strong>"ACE OLEDB provider was not detected"</strong> warning</td>
+      <td>Install the Microsoft Access Database Engine — see <strong>Part 2 ▸ Step 1</strong>.</td>
+    </tr>
+    <tr>
+      <td><strong>"Cannot run scripts on this system"</strong> when running the installer</td>
+      <td>You typed <code>install-helper.ps1</code> directly. Use the <strong>full command</strong> in
+        <strong>Part 2 ▸ Step 3</strong> — it starts with <code>powershell.exe -ExecutionPolicy Bypass…</code></td>
+    </tr>
+    <tr>
+      <td>The helper opens but says <strong>"Sign-in failed"</strong></td>
+      <td>Make sure you're signing in with the <strong>same account</strong> you use for Power Apps.
+        If you have multiple work accounts, the helper picks the one Windows knows about — sign
+        out of the wrong one in Windows Settings ▸ Accounts.</td>
+    </tr>
+    <tr>
+      <td>The app doesn't see the helper when I click <strong>"Scan"</strong></td>
+      <td>Close the browser tab and reopen the app. Make sure you ran the installer (not just
+        unzipped the folder).</td>
+    </tr>
+  </tbody>
+</table>
+
+<h1>🗑️ How to uninstall</h1>
+
+<p><strong>The helper:</strong> Open <strong>Settings ▸ Apps ▸ Installed apps</strong>, find
+<strong>Access-To-Power Helper</strong>, click the three dots, click <strong>Uninstall</strong>.</p>
+
+<p><strong>The app:</strong> In the Power Platform admin center, go to your environment ▸
+<strong>Solutions</strong>, find <strong>Access to Power</strong>, click the three dots, click
+<strong>Delete</strong>.</p>
+
+<h1>📚 Want to know more?</h1>
+
+<ul>
+  <li>Architecture and design: see <strong>README.md</strong>.</li>
+  <li>Installer details: see <strong>helper/installer/README.md</strong>.</li>
+  <li>Source code: the repo. Issues and pull requests welcome.</li>
+</ul>
+
+</main>
+
+</body>
+</html>

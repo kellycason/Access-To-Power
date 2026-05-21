@@ -64,14 +64,27 @@ public partial class MainWindow : Window
             _cts = new CancellationTokenSource();
             try
             {
-                await RunMigrateAsync(launch, _cts.Token).ConfigureAwait(true);
-                StatusText.Text = "Migration complete. Switch back to the Code App.";
+                var overallStatus = await RunMigrateAsync(launch, _cts.Token).ConfigureAwait(true);
                 Progress.Value = 100;
-                MessageBox.Show(this,
-                    "Migration completed. Switch back to the Code App for the validation report.",
-                    "Migration complete",
-                    MessageBoxButton.OK,
-                    MessageBoxImage.Information);
+                if (string.Equals(overallStatus, "ok", StringComparison.OrdinalIgnoreCase))
+                {
+                    StatusText.Text = "Migration succeeded. Switch back to the Code App.";
+                    MessageBox.Show(this,
+                        "Migration succeeded. Switch back to the Code App for the validation report.",
+                        "Migration succeeded",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Information);
+                }
+                else
+                {
+                    var statusText = string.IsNullOrWhiteSpace(overallStatus) ? "partial" : overallStatus;
+                    StatusText.Text = $"Migration finished with issues ({statusText}). Switch back to the Code App.";
+                    MessageBox.Show(this,
+                        $"Migration finished with issues ({statusText}). Switch back to the Code App and review the validation report before using the data.",
+                        "Migration needs review",
+                        MessageBoxButton.OK,
+                        MessageBoxImage.Warning);
+                }
             }
             catch (OperationCanceledException)
             {
@@ -83,9 +96,36 @@ public partial class MainWindow : Window
                 MessageBox.Show(this, ex.ToString(), "Migration failed", MessageBoxButton.OK, MessageBoxImage.Error);
             }
         }
+        else if (launch.Mode == Protocol.LaunchMode.GenerateMda)
+        {
+            PickButton.IsEnabled = false;
+            StartButton.IsEnabled = false;
+            FilePathText.Text = "(MDA mode \u2014 generating model-driven app)";
+            _cts = new CancellationTokenSource();
+            try
+            {
+                var result = await RunGenerateMdaAsync(launch, _cts.Token).ConfigureAwait(true);
+                StatusText.Text = "Model-driven app ready. Switch back to the Code App.";
+                Progress.Value = 100;
+                MessageBox.Show(this,
+                    $"Model-driven app generated.\n\nPlay URL:\n{result.PlayUrl}",
+                    "App ready",
+                    MessageBoxButton.OK,
+                    MessageBoxImage.Information);
+            }
+            catch (OperationCanceledException)
+            {
+                StatusText.Text = "Cancelled.";
+            }
+            catch (Exception ex)
+            {
+                StatusText.Text = $"App generation failed: {ex.Message}";
+                MessageBox.Show(this, ex.ToString(), "App generation failed", MessageBoxButton.OK, MessageBoxImage.Error);
+            }
+        }
     }
 
-    private async Task RunMigrateAsync(Protocol.LaunchArgs launch, CancellationToken ct)
+    private async Task<string?> RunMigrateAsync(Protocol.LaunchArgs launch, CancellationToken ct)
     {
         void Report(int pct, string msg)
         {
@@ -193,7 +233,7 @@ public partial class MainWindow : Window
             Report(100, "Schema ready. Awaiting user approval to load data.");
             OrchLog("phase", "Phase=SchemaOnly: schema provisioned. Setting status \u2192 12 (SchemaReady). Re-launch with phase=data to load rows.");
             await dv.SetJobStatusAsync(launch.JobId, 12, ct).ConfigureAwait(false);
-            return;
+            return "schema-ready";
         }
 
         Report(40, "Schema ready. Advancing job to LoadingData…");
@@ -257,6 +297,7 @@ public partial class MainWindow : Window
         OrchLog("phase", $"Pass 3 complete. OverallStatus='{report.OverallStatus}'. Setting status \u2192 {finalStatus}.");
         await dv.SetJobStatusAsync(launch.JobId, finalStatus, ct).ConfigureAwait(false);
         Report(100, $"Migration finished: {report.OverallStatus}.");
+        return report.OverallStatus;
         }
         catch (OperationCanceledException)
         {
@@ -270,6 +311,77 @@ public partial class MainWindow : Window
             try { await dv.SetJobStatusAsync(launch.JobId, 11, ct).ConfigureAwait(false); } catch { /* best-effort */ }
             throw;
         }
+    }
+
+    private async Task<MdaResult> RunGenerateMdaAsync(Protocol.LaunchArgs launch, CancellationToken ct)
+    {
+        void Report(int pct, string msg)
+        {
+            Dispatcher.Invoke(() =>
+            {
+                Progress.Value = pct;
+                StatusText.Text = msg;
+            });
+        }
+
+        Report(2, "Signing in\u2026");
+        var auth = new AuthService(launch.EnvironmentUrl, launch.TenantId);
+        var token = await auth.GetTokenAsync(ct).ConfigureAwait(false);
+
+        Report(6, "Loading migration job\u2026");
+        using var dv = new DataverseClient(launch.EnvironmentUrl, token);
+        var job = await dv.GetMigrationJobAsync(launch.JobId, ct).ConfigureAwait(false);
+
+        string publisherPrefix = job.TryGetProperty("acp_targetpublisherprefix", out var p) && p.ValueKind == JsonValueKind.String
+            ? p.GetString()! : "acp";
+        string solutionUniqueName = job.TryGetProperty("acp_targetsolutionname", out var s) && s.ValueKind == JsonValueKind.String
+            ? s.GetString()! : "AccessToPowerMigration";
+        string jobName = job.TryGetProperty("acp_name", out var n) && n.ValueKind == JsonValueKind.String
+            ? n.GetString()! : launch.JobName;
+
+        Report(10, "Reading migration plan\u2026");
+        var planJson = await dv.ReadAnnotationTextAsync(launch.JobId, "migration-plan.json", ct).ConfigureAwait(false)
+            ?? throw new InvalidOperationException("migration-plan.json not found on the job. Re-run the migration first.");
+        var plan = JsonSerializer.Deserialize<MigrationPlan>(planJson)
+            ?? throw new InvalidOperationException("Failed to parse migration-plan.json.");
+
+        await dv.ReplaceAnnotationTextAsync(launch.JobId, "mda-log.ndjson", "application/x-ndjson", "", ct).ConfigureAwait(false);
+
+        Action<ProgressEvent> forward = ev =>
+        {
+            if (ev.Progress is int pct) Report(pct, ev.Message);
+            else Dispatcher.Invoke(() => StatusText.Text = ev.Message);
+
+            var line = JsonSerializer.Serialize(new
+            {
+                kind = ev.Kind,
+                message = ev.Message,
+                severity = ev.Severity,
+                progress = ev.Progress,
+                entityLogicalName = ev.EntityLogicalName,
+                timestamp = DateTimeOffset.UtcNow.ToString("o"),
+            });
+            try
+            {
+                dv.AppendAnnotationLineAsync(launch.JobId, "mda-log.ndjson", "application/x-ndjson", line, ct)
+                    .GetAwaiter().GetResult();
+            }
+            catch { /* logging is best-effort */ }
+        };
+
+        var creator = new ModelDrivenAppCreator(dv, forward);
+        var result = await creator.RunAsync(launch.JobId, plan, publisherPrefix, solutionUniqueName, $"{jobName} App", ct).ConfigureAwait(false);
+
+        var resultJson = JsonSerializer.Serialize(new
+        {
+            appModuleId = result.AppModuleId.ToString("D"),
+            appUniqueName = result.AppUniqueName,
+            playUrl = result.PlayUrl,
+            generatedAt = DateTimeOffset.UtcNow.ToString("o"),
+        });
+        await dv.ReplaceAnnotationTextAsync(launch.JobId, "mda-result.json", "application/json", resultJson, ct).ConfigureAwait(false);
+
+        return result;
     }
 
     private static async Task RunSnapshotOnlyAsyncStatic(Protocol.LaunchArgs launch, Action<int, string> report, CancellationToken ct)
@@ -411,18 +523,42 @@ public partial class MainWindow : Window
 
         try
         {
+            // Pass A: read schema + sample for every table first. Streaming
+            // rows must wait until after DAO enrichment so columns flagged
+            // as multi-value or attachment can be skipped at write time
+            // (ACE OLEDB would otherwise return chapter rowsets / nulls).
+            var schemas = new List<AccessTable>(tableNames.Count);
             for (var i = 0; i < tableNames.Count; i++)
             {
                 ct.ThrowIfCancellationRequested();
                 var name = tableNames[i];
-                var pct = 15 + (int)(60.0 * i / Math.Max(1, tableNames.Count));
-                Report(pct, $"Reading table {i + 1} of {tableNames.Count}: {name}");
+                var pct = 15 + (int)(35.0 * i / Math.Max(1, tableNames.Count));
+                Report(pct, $"Reading schema {i + 1} of {tableNames.Count}: {name}");
 
                 var schema = reader.ReadTableSchema(name);
-                // Sample-based hints for date-only and float precision (guide
-                // Part 2). Cheap — reads at most 200 rows per column.
                 reader.EnrichColumnsFromSamples(schema);
-                var rowsFileName = SafeFileName(name) + ".ndjson";
+                schemas.Add(schema);
+                manifest.Tables.Add(schema);
+            }
+
+            manifest.Relationships.AddRange(reader.ReadRelationships());
+
+            // DAO pass: pick up things ACE OLEDB can't see — value lists for
+            // Lookup-Wizard columns (→ Dataverse Choice) and multi-value /
+            // attachment fields (→ flagged as dropped in the report).
+            Report(52, "Reading lookup metadata…");
+            DaoEnricher.Enrich(manifest, accdbPath, msg => System.Diagnostics.Debug.WriteLine($"[DaoEnricher] {msg}"));
+
+            // Pass B: stream rows per table now that DataType has been
+            // upgraded to "Multivalue" / "Attachment" where appropriate.
+            for (var i = 0; i < schemas.Count; i++)
+            {
+                ct.ThrowIfCancellationRequested();
+                var schema = schemas[i];
+                var pct = 55 + (int)(20.0 * i / Math.Max(1, schemas.Count));
+                Report(pct, $"Streaming rows {i + 1} of {schemas.Count}: {schema.Name}");
+
+                var rowsFileName = SafeFileName(schema.Name) + ".ndjson";
                 schema.RowsFile = rowsFileName;
                 var rowsPath = Path.Combine(staging, rowsFileName);
 
@@ -437,10 +573,7 @@ public partial class MainWindow : Window
                     }
                 }
                 schema.RowsSha256 = await Sha256Async(rowsPath, ct).ConfigureAwait(false);
-                manifest.Tables.Add(schema);
             }
-
-            manifest.Relationships.AddRange(reader.ReadRelationships());
 
             Report(78, "Uploading manifest…");
             var manifestJson = JsonSerializer.Serialize(manifest, new JsonSerializerOptions { WriteIndented = false });

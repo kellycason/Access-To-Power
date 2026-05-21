@@ -124,7 +124,9 @@ public sealed record LaunchArgs
                 ? LaunchMode.SnapshotOnly
                 : string.Equals(mode, "migrate", StringComparison.OrdinalIgnoreCase)
                     ? LaunchMode.Migrate
-                    : LaunchMode.FullUpload,
+                    : string.Equals(mode, "mda", StringComparison.OrdinalIgnoreCase)
+                        ? LaunchMode.GenerateMda
+                        : LaunchMode.FullUpload,
             Phase = string.Equals(phase, "schema", StringComparison.OrdinalIgnoreCase)
                 ? MigratePhase.SchemaOnly
                 : string.Equals(phase, "data", StringComparison.OrdinalIgnoreCase)
@@ -142,6 +144,8 @@ public enum LaunchMode
     SnapshotOnly,
     /// <summary>Read the approved migration plan annotation and create schema/data in Dataverse.</summary>
     Migrate,
+    /// <summary>Generate a model-driven app over the migrated tables. Reads migration-plan.json from the job.</summary>
+    GenerateMda,
 }
 
 /// <summary>

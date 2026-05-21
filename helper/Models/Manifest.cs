@@ -69,6 +69,9 @@ public sealed class AccessColumn
     [JsonPropertyName("description")] public string? Description { get; set; }
     [JsonPropertyName("detectedDateOnly")] public bool? DetectedDateOnly { get; set; }
     [JsonPropertyName("detectedMaxDecimals")] public int? DetectedMaxDecimals { get; set; }
+    [JsonPropertyName("valueList")] public List<string>? ValueList { get; set; }
+    [JsonPropertyName("limitToList")] public bool? LimitToList { get; set; }
+    [JsonPropertyName("unsupportedReason")] public string? UnsupportedReason { get; set; }
     [JsonPropertyName("issues")] public List<ManifestIssue>? Issues { get; set; }
 }
 

@@ -1,50 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Button,
-  Body1,
-  Title3,
-  ProgressBar,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  MessageBar,
-  MessageBarBody,
-  Tag,
-  Checkbox,
-  makeStyles,
-  tokens,
-} from "@fluentui/react-components";
+import { Alert } from "../ui/Alert";
+import { Badge } from "../ui/Badge";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Checkbox } from "../ui/Checkbox";
+import { HelperLaunchModal, type HelperMode } from "../ui/HelperLaunchModal";
+import { HelperWaitingPanel } from "../ui/HelperWaitingPanel";
+import { ProgressBar } from "../ui/ProgressBar";
+import { Spinner } from "../ui/Spinner";
+import { cx } from "../ui/cx";
 import type { MigrationPlan } from "../types/manifest";
 import { getDataverseClient } from "../services/dataverseClient";
 import type { ProgressEvent } from "../services/schemaCreator";
-import type { ValidationReport } from "../services/validator";
-
-const useStyles = makeStyles({
-  page: { display: "flex", flexDirection: "column", gap: "16px" },
-  actions: { display: "flex", justifyContent: "space-between" },
-  logBox: {
-    backgroundColor: tokens.colorNeutralBackground3,
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: "4px",
-    padding: "12px",
-    fontFamily: "Consolas, 'Cascadia Mono', monospace",
-    fontSize: "12px",
-    height: "260px",
-    overflowY: "auto",
-    whiteSpace: "pre-wrap",
-  },
-  logLine: { display: "block" },
-  warn: { color: tokens.colorPaletteDarkOrangeForeground1 },
-  err: { color: tokens.colorPaletteRedForeground1 },
-});
+import { parseHelperMigrationReport, type ValidationReport } from "../services/validator";
 
 interface Props {
   plan: MigrationPlan;
   migrationJobId: string | null;
   onCompleted: (report: ValidationReport) => void;
+  /** Fired the first time the helper launch is triggered for this job. */
+  onStarted?: () => void;
   onBack: () => void;
 }
 
@@ -52,18 +27,45 @@ type PhaseStatus = "pending" | "running" | "done" | "failed";
 interface Phase {
   key: "schema" | "load" | "lookups" | "validate";
   label: string;
+  description: string;
   status: PhaseStatus;
 }
 
 const INITIAL_PHASES: Phase[] = [
-  { key: "schema", label: "Create Dataverse schema", status: "pending" },
-  { key: "load", label: "Load data (pass 1)", status: "pending" },
-  { key: "lookups", label: "Resolve lookups (pass 2)", status: "pending" },
-  { key: "validate", label: "Validate row counts", status: "pending" },
+  {
+    key: "schema",
+    label: "Create Dataverse schema",
+    description: "Tables, columns, lookups, and alternate keys.",
+    status: "pending",
+  },
+  {
+    key: "load",
+    label: "Load data (pass 1)",
+    description: "Insert rows; defer cross-table lookups.",
+    status: "pending",
+  },
+  {
+    key: "lookups",
+    label: "Resolve lookups (pass 2)",
+    description: "Wire up foreign keys with the GUIDs we just minted.",
+    status: "pending",
+  },
+  {
+    key: "validate",
+    label: "Validate row counts",
+    description: "Compare actual rows in Dataverse vs. expected from Access.",
+    status: "pending",
+  },
 ];
 
-export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props) {
-  const styles = useStyles();
+const PHASE_TONE: Record<PhaseStatus, "neutral" | "brand" | "success" | "danger"> = {
+  pending: "neutral",
+  running: "brand",
+  done: "success",
+  failed: "danger",
+};
+
+export function MigrateStep({ plan, migrationJobId, onCompleted, onStarted, onBack }: Props) {
   const [phases, setPhases] = useState<Phase[]>(INITIAL_PHASES);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -73,6 +75,8 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
   const [waitingForHelper, setWaitingForHelper] = useState(false);
   const [schemaOnly, setSchemaOnly] = useState(false);
   const [schemaReady, setSchemaReady] = useState(false);
+  const [launch, setLaunch] = useState<{ mode: HelperMode; url: string; phase: "full" | "schema" | "data" } | null>(null);
+  const [migrateModalOpen, setMigrateModalOpen] = useState(false);
   const pollTimer = useRef<number | null>(null);
   const lastLogLength = useRef<number>(0);
 
@@ -85,9 +89,12 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
     [plan],
   );
 
-  useEffect(() => () => {
-    if (pollTimer.current) window.clearInterval(pollTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (pollTimer.current) window.clearInterval(pollTimer.current);
+    },
+    [],
+  );
 
   function setPhase(key: Phase["key"], status: PhaseStatus) {
     setPhases((cur) => cur.map((p) => (p.key === key ? { ...p, status } : p)));
@@ -103,11 +110,11 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
     setRunning(true);
     setError(null);
     setLogLines([]);
+    onStarted?.();
     if (phase !== "data") {
       setPhases(INITIAL_PHASES);
       setSchemaReady(false);
     } else {
-      // Resuming from SchemaReady — keep schema as done, mark load running.
       setPhases((cur) =>
         cur.map((p) =>
           p.key === "schema"
@@ -132,17 +139,12 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
           "Migration job is missing target publisher prefix or solution name. Go back to Connect.",
         );
       }
-
-      // 1. Save the approved plan (only for the first launch — re-save is harmless).
       if (phase !== "data") {
         appendLog({ kind: "phase", message: "Saving migration plan…" });
         await client.savePlan(migrationJobId, plan);
       }
+      await client.setJobStatus(migrationJobId, 5);
 
-      // 2. Mark the job as queued for the helper.
-      await client.setJobStatus(migrationJobId, 5); // Creating Schema (helper will advance)
-
-      // 3. Launch the desktop helper.
       const phaseLabel =
         phase === "schema" ? "schema-only" : phase === "data" ? "data load" : "full migration";
       appendLog({ kind: "phase", message: `Launching desktop helper (${phaseLabel})…` });
@@ -153,17 +155,13 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
       url.searchParams.set("name", job.name);
       url.searchParams.set("mode", "migrate");
       if (phase !== "full") url.searchParams.set("phase", phase);
-      window.location.href = url.toString();
-
-      // 4. Begin polling.
-      setWaitingForHelper(true);
-      if (phase !== "data") setPhase("schema", "running");
-      startPolling();
+      const helperMode: HelperMode =
+        phase === "schema" ? "migrate-schema" : phase === "data" ? "migrate-data" : "migrate-full";
+      setLaunch({ mode: helperMode, url: url.toString(), phase });
+      setMigrateModalOpen(true);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-      setPhases((cur) =>
-        cur.map((p) => (p.status === "running" ? { ...p, status: "failed" } : p)),
-      );
+      setPhases((cur) => cur.map((p) => (p.status === "running" ? { ...p, status: "failed" } : p)));
       setRunning(false);
     }
   }
@@ -191,8 +189,6 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
         client.getJob(migrationJobId),
         client.tryGetMigrationLog(migrationJobId),
       ]);
-
-      // Apply log delta.
       if (log) {
         const lines = log.split(/\r?\n/).filter(Boolean);
         if (lines.length > lastLogLength.current) {
@@ -208,10 +204,6 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
           lastLogLength.current = lines.length;
         }
       }
-
-      // Advance phase state from job.status (5..12).
-      // 5=Creating Schema, 6=Loading Data, 7=Resolving Lookups, 8=Validating,
-      // 9=ok, 10=partial, 11=failed, 12=SchemaReady (schema-only stopped).
       switch (job.status) {
         case 5:
           setPhase("schema", "running");
@@ -241,23 +233,36 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
           break;
         case 9:
         case 10:
-          setPhases([
-            { key: "schema", label: "Create Dataverse schema", status: "done" },
-            { key: "load", label: "Load data (pass 1)", status: "done" },
-            { key: "lookups", label: "Resolve lookups (pass 2)", status: "done" },
-            { key: "validate", label: "Validate row counts", status: "done" },
-          ]);
+          setPhases(INITIAL_PHASES.map((p) => ({ ...p, status: "done" })));
           setPhaseProgress(100);
           stopPolling();
           setRunning(false);
           setWaitingForHelper(false);
-          // Synthesize a minimal report from the log; richer report will land in Slice B.
-          setReport({
-            overallStatus: job.status === 9 ? "ok" : "mismatch",
-            tables: [],
-            totalExpected: totalRows,
-            totalActual: totalRows,
-          });
+          // Pull the rich migration-report.json the helper just wrote so the
+          // Validate step can show per-table row counts, dropped columns,
+          // warnings, and rejected rows — not just a thumbs-up / thumbs-down.
+          void (async () => {
+            const fallback: ValidationReport = {
+              overallStatus: job.status === 9 ? "ok" : "mismatch",
+              tables: [],
+              totalExpected: totalRows,
+              totalActual: totalRows,
+              totalRejected: 0,
+              unresolvedLookups: 0,
+            };
+            try {
+              const client = getDataverseClient();
+              if (!migrationJobId) {
+                setReport(fallback);
+                return;
+              }
+              const raw = await client.tryGetMigrationReport(migrationJobId);
+              const parsed = raw ? parseHelperMigrationReport(raw) : null;
+              setReport(parsed ?? fallback);
+            } catch {
+              setReport(fallback);
+            }
+          })();
           break;
         case 11:
           setPhases((cur) =>
@@ -267,10 +272,22 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
           setRunning(false);
           setWaitingForHelper(false);
           setError("Migration failed. Check the activity log for details.");
+          // Even on failure the helper may have written a partial report —
+          // surface whatever it has so the user can see which tables made it.
+          void (async () => {
+            try {
+              if (!migrationJobId) return;
+              const client = getDataverseClient();
+              const raw = await client.tryGetMigrationReport(migrationJobId);
+              const parsed = raw ? parseHelperMigrationReport(raw) : null;
+              if (parsed) setReport(parsed);
+            } catch {
+              /* ignore — error banner is already shown */
+            }
+          })();
           break;
       }
     } catch (e) {
-      // Transient — keep polling, but surface once.
       setError((cur) => cur ?? (e instanceof Error ? e.message : String(e)));
     }
   }
@@ -285,112 +302,192 @@ export function MigrateStep({ plan, migrationJobId, onCompleted, onBack }: Props
   const allDone = phases.every((p) => p.status === "done");
 
   return (
-    <div className={styles.page}>
-      <Title3>Migrate</Title3>
-      <Body1>
-        Job: <code>{migrationJobId ?? "(none)"}</code> — {totalTables} tables /{" "}
-        {totalRows} rows
-      </Body1>
-      <Table size="small">
-        <TableHeader>
-          <TableRow>
-            <TableHeaderCell>Phase</TableHeaderCell>
-            <TableHeaderCell>Status</TableHeaderCell>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {phases.map((p) => (
-            <TableRow key={p.key}>
-              <TableCell>{p.label}</TableCell>
-              <TableCell>
-                {p.status === "running" ? (
-                  <ProgressBar value={phaseProgress / 100} />
-                ) : (
-                  <Tag appearance={p.status === "failed" ? "filled" : "outline"}>
-                    {p.status}
-                  </Tag>
-                )}
-              </TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-
-      <div className={styles.logBox}>
-        {logLines.length === 0 && (
-          <span style={{ color: tokens.colorNeutralForeground3 }}>
-            Activity log will appear here when migration starts.
-          </span>
-        )}
-        {logLines.map((e, i) => (
-          <span
-            key={i}
-            className={`${styles.logLine} ${
-              e.severity === "warn" ? styles.warn : e.severity === "error" ? styles.err : ""
-            }`}
-          >
-            [{e.kind}] {e.message}
-          </span>
-        ))}
+    <div className="space-y-5">
+      <div className="grid grid-cols-3 gap-4">
+        <Stat label="Tables to migrate" value={totalTables.toLocaleString()} />
+        <Stat label="Rows" value={totalRows.toLocaleString()} />
+        <Stat
+          label="Job ID"
+          value={migrationJobId ? `${migrationJobId.slice(0, 8)}…` : "—"}
+          mono
+        />
       </div>
 
-      {waitingForHelper && (
-        <MessageBar intent="info">
-          <MessageBarBody>
-            The desktop helper is running the migration. Keep this tab open — progress will appear here as it works.
-          </MessageBarBody>
-        </MessageBar>
+      <Card>
+        <div className="flex items-center justify-between mb-4">
+          <div>
+            <div className="text-base font-semibold text-ink-900">Migration phases</div>
+            <div className="text-sm text-ink-500 mt-0.5">
+              The desktop helper drives each phase and reports back to this view.
+            </div>
+          </div>
+        </div>
+        <ol className="space-y-3">
+          {phases.map((p, i) => (
+            <li
+              key={p.key}
+              className={cx(
+                "flex items-start gap-4 p-3 rounded-xl border transition",
+                p.status === "running" && "border-brand-200 bg-brand-50/40",
+                p.status === "done" && "border-emerald-200 bg-emerald-50/40",
+                p.status === "failed" && "border-rose-200 bg-rose-50/40",
+                p.status === "pending" && "border-ink-200 bg-white",
+              )}
+            >
+              <div
+                className={cx(
+                  "h-8 w-8 rounded-full flex items-center justify-center text-sm font-semibold shrink-0",
+                  p.status === "done" && "bg-emerald-500 text-white",
+                  p.status === "running" && "bg-brand-600 text-white",
+                  p.status === "failed" && "bg-rose-500 text-white",
+                  p.status === "pending" && "bg-ink-100 text-ink-500",
+                )}
+              >
+                {p.status === "done" ? (
+                  <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor" aria-hidden>
+                    <path d="M16.7 5.3a1 1 0 010 1.4l-7 7a1 1 0 01-1.4 0l-3.5-3.5a1 1 0 011.4-1.4L9 11.6l6.3-6.3a1 1 0 011.4 0z" />
+                  </svg>
+                ) : p.status === "running" ? (
+                  <Spinner size={14} />
+                ) : (
+                  i + 1
+                )}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center justify-between gap-2">
+                  <div className="text-sm font-semibold text-ink-900">{p.label}</div>
+                  <Badge tone={PHASE_TONE[p.status]}>{p.status}</Badge>
+                </div>
+                <div className="text-xs text-ink-500 mt-0.5">{p.description}</div>
+                {p.status === "running" && (
+                  <ProgressBar value={phaseProgress} className="mt-2" size="sm" />
+                )}
+              </div>
+            </li>
+          ))}
+        </ol>
+      </Card>
+
+      <Card padding="none">
+        <div className="flex items-center justify-between px-5 pt-4 pb-2">
+          <div className="text-sm font-semibold text-ink-900">Activity log</div>
+          <div className="text-xs text-ink-500">{logLines.length} entries</div>
+        </div>
+        <div className="bg-ink-900 text-ink-100 font-mono text-xs leading-relaxed max-h-72 overflow-y-auto rounded-b-2xl">
+          {logLines.length === 0 ? (
+            <div className="px-5 py-4 text-ink-400">
+              Activity log will appear here when the migration starts.
+            </div>
+          ) : (
+            logLines.map((e, i) => (
+              <div
+                key={i}
+                className={cx(
+                  "px-5 py-1 whitespace-pre-wrap break-words",
+                  e.severity === "error" && "bg-rose-900/20 text-rose-200",
+                  e.severity === "warn" && "text-amber-200",
+                  e.kind === "phase" && "text-brand-200 font-semibold",
+                )}
+              >
+                <span className="text-ink-400 mr-2">[{e.kind}]</span>
+                {e.message}
+              </div>
+            ))
+          )}
+        </div>
+      </Card>
+
+      {waitingForHelper && logLines.length === 0 && (
+        <HelperWaitingPanel
+          title="Waiting for the helper"
+          description="The helper is starting the migration. Live progress and logs will stream in here as soon as it begins."
+          helperUrl={launch?.url ?? null}
+          onRelaunch={launch ? () => setMigrateModalOpen(true) : undefined}
+        />
+      )}
+      {waitingForHelper && logLines.length > 0 && (
+        <Alert intent="info">
+          The desktop helper is running the migration. Keep this tab open — progress will appear
+          here as it works.
+        </Alert>
       )}
       {schemaReady && (
-        <MessageBar intent="success">
-          <MessageBarBody>
-            Schema provisioned. Open the maker portal to inspect the new tables, columns, lookups, and alternate keys. When you're satisfied, click <strong>Load data now</strong> to migrate the rows.
-          </MessageBarBody>
-        </MessageBar>
+        <Alert intent="success" title="Schema provisioned">
+          Open the maker portal to inspect the new tables, columns, lookups, and alternate keys.
+          When you're satisfied, click <strong>Load data now</strong> to migrate the rows.
+        </Alert>
       )}
-      {error && (
-        <MessageBar intent="error">
-          <MessageBarBody>{error}</MessageBarBody>
-        </MessageBar>
-      )}
-      <div className={styles.actions}>
-        <Button disabled={running} onClick={onBack}>
+      {error && <Alert intent="error">{error}</Alert>}
+
+      <div className="flex items-center justify-between pt-2">
+        <Button variant="secondary" disabled={running} onClick={onBack}>
           Back
         </Button>
-        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+        <div className="flex items-center gap-3">
           {!running && !schemaReady && !allDone && (
             <Checkbox
-              label="Provision schema only (review before loading data)"
+              label="Provision schema only"
+              description="Review tables before loading data."
               checked={schemaOnly}
-              onChange={(_, d) => setSchemaOnly(!!d.checked)}
+              onChange={(e) => setSchemaOnly(e.target.checked)}
             />
           )}
           {running ? (
-            <Button onClick={cancel}>Cancel</Button>
+            <Button variant="secondary" onClick={cancel}>
+              Cancel
+            </Button>
           ) : schemaReady ? (
-            <Button
-              appearance="primary"
-              onClick={() => void run("data")}
-              disabled={!migrationJobId}
-            >
+            <Button variant="primary" onClick={() => void run("data")} disabled={!migrationJobId}>
               Load data now
             </Button>
-          ) : (
+          ) : schemaDone || allDone ? null : (
+            // Once schema is in Dataverse there's no safe "Re-run" — it would
+            // duplicate rows or fail on unique keys. If the run failed midway,
+            // the user should go Back and start a fresh job rather than
+            // retrying on top of a partial migration.
             <Button
-              appearance="primary"
+              variant="primary"
               onClick={() => void run(schemaOnly ? "schema" : "full")}
               disabled={!migrationJobId}
             >
-              {schemaDone ? "Re-run migration" : schemaOnly ? "Provision schema" : "Start migration"}
+              {schemaOnly ? "Provision schema" : "Start migration"}
             </Button>
           )}
           {allDone && report && (
-            <Button appearance="primary" onClick={() => onCompleted(report)}>
+            <Button variant="primary" onClick={() => onCompleted(report)}>
               Continue
             </Button>
           )}
         </div>
       </div>
+
+      <HelperLaunchModal
+        open={migrateModalOpen}
+        mode={launch?.mode ?? "migrate-full"}
+        helperUrl={launch?.url ?? ""}
+        onClose={() => setMigrateModalOpen(false)}
+        onLaunched={() => {
+          setWaitingForHelper(true);
+          if (launch && launch.phase !== "data") setPhase("schema", "running");
+          startPolling();
+        }}
+      />
     </div>
+  );
+}
+
+function Stat({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <Card>
+      <div className="text-xs uppercase tracking-wide text-ink-500 font-medium">{label}</div>
+      <div
+        className={cx(
+          "text-2xl font-semibold text-ink-900 mt-1",
+          mono && "font-mono text-base",
+        )}
+      >
+        {value}
+      </div>
+    </Card>
   );
 }

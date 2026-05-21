@@ -71,10 +71,25 @@ public sealed class DataLoader
                 $"Loading {accessTable.Name} ({accessTable.RowCount} rows)",
                 tm.DataverseSchemaName, pct);
 
-            // Resume support: if the idmap annotation already exists with the
-            // expected row count, skip the load and just hydrate the map.
             var tableLogical = tm.DataverseSchemaName.ToLowerInvariant();
+            var entitySet = await ResolveEntitySetAsync(tm, ct).ConfigureAwait(false);
+
+            // Resume support: hydrate the existing id map, prune entries whose
+            // Dataverse row no longer exists, then only create missing source
+            // rows. This keeps a retry from trusting stale GUIDs or duplicating
+            // rows that were already committed in a prior run.
             var perTableMap = await TryLoadIdMapAsync(jobId, tableLogical, ct).ConfigureAwait(false);
+            if (perTableMap is not null && perTableMap.Count > 0)
+            {
+                var missing = await PruneMissingIdsAsync(entitySet, tableLogical, perTableMap, ct).ConfigureAwait(false);
+                if (missing > 0)
+                {
+                    await PersistIdMapAsync(jobId, tableLogical, perTableMap, ct).ConfigureAwait(false);
+                    Report("log",
+                        $"Resume map for {tableLogical} referenced {missing} Dataverse row(s) that no longer exist; those source rows will be reloaded.",
+                        severity: "warn");
+                }
+            }
             if (perTableMap is not null && perTableMap.Count >= accessTable.RowCount)
             {
                 idMap[tableLogical] = perTableMap;
@@ -85,7 +100,6 @@ public sealed class DataLoader
             perTableMap ??= new Dictionary<string, Guid>();
             idMap[tableLogical] = perTableMap;
 
-            var entitySet = await ResolveEntitySetAsync(tm, ct).ConfigureAwait(false);
             var pkColumn = accessTable.Columns.FirstOrDefault(c => c.IsPrimaryKey)?.Name;
 
             // System-required-field defaults for OOB tables (e.g. `product`
@@ -99,7 +113,7 @@ public sealed class DataLoader
             }
 
             var rows = await DownloadNdjsonAsync(jobId, accessTable.RowsFile, ct).ConfigureAwait(false);
-            var loaded = 0;
+            var loaded = perTableMap.Count;
             var rejectedRows = new List<RejectedRow>();
 
             for (var offset = 0; offset < rows.Count; offset += DefaultBatchSize)
@@ -116,6 +130,14 @@ public sealed class DataLoader
                 var sendableIdx = new List<int>(chunk.Count);
                 for (var j = 0; j < chunk.Count; j++)
                 {
+                    if (pkColumn is not null
+                        && chunk[j].TryGetValue(pkColumn, out var existingPkVal)
+                        && existingPkVal is not null
+                        && perTableMap.ContainsKey(Convert.ToString(existingPkVal, CultureInfo.InvariantCulture) ?? ""))
+                    {
+                        continue;
+                    }
+
                     var pr = TryProjectRow(chunk[j], tm, accessTable);
                     if (pr.Body is null)
                     {
@@ -144,7 +166,8 @@ public sealed class DataLoader
                     continue;
                 }
 
-                var batchResult = await TryExecuteCreateBatchAsync(entitySet, sendable, ct).ConfigureAwait(false);
+                var primaryIdName = tableLogical + "id";
+                var batchResult = await TryExecuteCreateBatchAsync(entitySet, primaryIdName, sendable, ct).ConfigureAwait(false);
 
                 if (batchResult is null)
                 {
@@ -235,13 +258,14 @@ public sealed class DataLoader
     /// </summary>
     private async Task<List<SubResult>?> TryExecuteCreateBatchAsync(
         string entitySet,
+        string primaryIdName,
         List<Dictionary<string, object?>> bodies,
         CancellationToken ct)
     {
         try
         {
             _lastBatchError = null;
-            return await ExecuteCreateBatchAsync(entitySet, bodies, ct).ConfigureAwait(false);
+            return await ExecuteCreateBatchAsync(entitySet, primaryIdName, bodies, ct).ConfigureAwait(false);
         }
         catch (BatchFailedException ex)
         {
@@ -290,6 +314,7 @@ public sealed class DataLoader
 
     private async Task<List<SubResult>> ExecuteCreateBatchAsync(
         string entitySet,
+        string primaryIdName,
         List<Dictionary<string, object?>> bodies,
         CancellationToken ct)
     {
@@ -314,7 +339,7 @@ public sealed class DataLoader
         sb.Append("--").Append(boundary).Append("--\r\n");
 
         var responseText = await SendBatchAsync(boundary, sb.ToString(), ct).ConfigureAwait(false);
-        return ParseBatchResults(responseText, bodies.Count);
+        return ParseBatchResults(responseText, bodies.Count, primaryIdName);
     }
 
     private async Task<string> SendBatchAsync(string boundary, string payload, CancellationToken ct)
@@ -381,7 +406,7 @@ public sealed class DataLoader
 
     private static readonly string[] ContentIdDelim = { "\r\nContent-ID: " };
 
-    private List<SubResult> ParseBatchResults(string responseText, int expected)
+    private List<SubResult> ParseBatchResults(string responseText, int expected, string primaryIdName)
     {
         var results = new List<SubResult>(expected);
         for (var i = 0; i < expected; i++) results.Add(new SubResult(false, null, "Unknown", "No sub-response parsed"));
@@ -424,12 +449,11 @@ public sealed class DataLoader
                         try
                         {
                             using var doc = JsonDocument.Parse(jsonSlice);
-                            foreach (var prop in doc.RootElement.EnumerateObject())
+                            if (doc.RootElement.TryGetProperty(primaryIdName, out var primaryId)
+                                && primaryId.ValueKind == JsonValueKind.String
+                                && Guid.TryParse(primaryId.GetString(), out var primaryGuid))
                             {
-                                if (prop.Name.Contains('@', StringComparison.Ordinal)) continue;
-                                if (!prop.Name.EndsWith("id", StringComparison.OrdinalIgnoreCase)) continue;
-                                if (prop.Value.ValueKind != JsonValueKind.String) continue;
-                                if (Guid.TryParse(prop.Value.GetString(), out var g2)) { newId = g2; break; }
+                                newId = primaryGuid;
                             }
                         }
                         catch (JsonException) { /* leave null */ }
@@ -556,6 +580,40 @@ public sealed class DataLoader
                 continue;
             }
 
+            // Choice: translate raw label → integer option value before the
+            // generic coercer runs. Dataverse picklist endpoints accept only
+            // ints. An unknown label is dropped (column left null) rather
+            // than rejecting the whole row — we'd rather lose a Choice value
+            // than fail the row entirely. The migration report surfaces
+            // unmatched labels as a per-table warning.
+            if (f.DataverseType == "Choice")
+            {
+                var label = Convert.ToString(v, CultureInfo.InvariantCulture)?.Trim();
+                if (string.IsNullOrEmpty(label)) continue;
+                int? matched = null;
+                if (f.ChoiceOptions is { Count: > 0 })
+                {
+                    foreach (var opt in f.ChoiceOptions)
+                    {
+                        if (string.Equals(opt.Label, label, StringComparison.OrdinalIgnoreCase))
+                        {
+                            matched = opt.Value;
+                            break;
+                        }
+                    }
+                    if (matched is null && int.TryParse(label, NumberStyles.Integer, CultureInfo.InvariantCulture, out var asInt))
+                    {
+                        foreach (var opt in f.ChoiceOptions)
+                        {
+                            if (opt.Value == asInt) { matched = asInt; break; }
+                        }
+                    }
+                }
+                if (matched is null) continue;
+                output[f.DataverseSchemaName.ToLowerInvariant()] = matched.Value;
+                continue;
+            }
+
             var coerced = Coerce(v, f.DataverseType);
             if (coerced is null)
             {
@@ -639,6 +697,44 @@ public sealed class DataLoader
 
             output[f.DataverseSchemaName.ToLowerInvariant()] = coerced;
         }
+
+        // Synthetic primary name population.
+        //
+        // When no Access column qualifies as a primary name (junction tables
+        // like BookAuthors, or tables where the only "naming" candidate is
+        // a Lookup/Int), SchemaCreator emits a synthetic <prefix>_name
+        // String attribute so Dataverse has *something* to render. Nothing
+        // ever writes to it, though, so the MDA view and lookups show blank
+        // rows. Synthesize a deterministic label here using the source PK
+        // value(s) so the user has something to click on.
+        var primaryField = string.IsNullOrEmpty(tm.PrimaryNameAccessColumn)
+            ? null
+            : tm.Fields.FirstOrDefault(f => string.Equals(f.AccessColumn, tm.PrimaryNameAccessColumn, StringComparison.OrdinalIgnoreCase));
+        var primaryFieldIsTextual = primaryField is not null
+            && (string.Equals(primaryField.DataverseType, "String", StringComparison.Ordinal)
+                || string.Equals(primaryField.DataverseType, "Memo", StringComparison.Ordinal));
+        if (!primaryFieldIsTextual)
+        {
+            var prefix = tm.DataverseSchemaName.Split('_', 2)[0];
+            var syntheticKey = $"{prefix}_name";
+            if (!output.ContainsKey(syntheticKey))
+            {
+                var pkValues = accessTable.Columns
+                    .Where(c => c.IsPrimaryKey)
+                    .Select(c => row.TryGetValue(c.Name, out var v) ? Convert.ToString(v, CultureInfo.InvariantCulture) : null)
+                    .Where(s => !string.IsNullOrEmpty(s))
+                    .ToList();
+                var display = string.IsNullOrEmpty(tm.DataverseDisplayName)
+                    ? tm.AccessTable
+                    : tm.DataverseDisplayName;
+                var label = pkValues.Count > 0
+                    ? $"{display} {string.Join("-", pkValues)}"
+                    : display;
+                if (label.Length > 100) label = label[..100];
+                output[syntheticKey] = label;
+            }
+        }
+
         return ProjectionResult.Ok(output);
     }
 
@@ -772,6 +868,29 @@ public sealed class DataLoader
         {
             return null;
         }
+    }
+
+    private async Task<int> PruneMissingIdsAsync(
+        string entitySet,
+        string tableLogical,
+        Dictionary<string, Guid> map,
+        CancellationToken ct)
+    {
+        var primaryId = tableLogical + "id";
+        var missingKeys = new List<string>();
+        foreach (var kv in map)
+        {
+            ct.ThrowIfCancellationRequested();
+            var exists = await _dv.ExistsAsync($"{entitySet}({kv.Value:D})?$select={primaryId}", ct)
+                .ConfigureAwait(false);
+            if (!exists) missingKeys.Add(kv.Key);
+        }
+
+        foreach (var key in missingKeys)
+        {
+            map.Remove(key);
+        }
+        return missingKeys.Count;
     }
 
     private async Task PersistIdMapAsync(Guid jobId, string tableLogical, Dictionary<string, Guid> map, CancellationToken ct)

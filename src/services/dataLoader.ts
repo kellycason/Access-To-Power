@@ -65,6 +65,12 @@ export async function loadData(opts: LoadOptions): Promise<IdMap> {
     });
 
     const rows = await fetchNdjsonRows(envUrl, plan.migrationJobId, accessTable.rowsFile, opts.signal);
+    if (rows.length === 0 && accessTable.rowCount > 0) {
+      throw new Error(
+        `No rows found for ${accessTable.name}. The row data file '${accessTable.rowsFile}' is missing from the migration job (expected ${accessTable.rowCount} rows). ` +
+        `Re-run the Scan step in the desktop helper to re-upload row data, then try again.`,
+      );
+    }
     const tableIdMap = new Map<string, string>();
     idMap.set(tm.dataverseSchemaName.toLowerCase(), tableIdMap);
 
@@ -310,7 +316,9 @@ function projectRow(
     if (f.dataverseType === "Lookup") continue; // pass 2
     const v = row[f.accessColumn];
     if (v === null || v === undefined) continue;
-    out[f.dataverseSchemaName.toLowerCase()] = coerce(v, f);
+    const coerced = coerce(v, f);
+    if (coerced === undefined) continue; // unmappable Choice label -> leave null
+    out[f.dataverseSchemaName.toLowerCase()] = coerced;
   }
   return out;
 }
@@ -333,6 +341,24 @@ function coerce(value: unknown, f: FieldMapping): unknown {
     case "DateTime":
       // Helper emits ISO 8601 already; pass through.
       return String(value);
+    case "Choice": {
+      // Dataverse picklist columns accept only the integer option value. The
+      // plan carries the label→int map materialized at build time; look up
+      // the raw row value (case-insensitive, trimmed). If we can't match,
+      // return undefined so projectRow drops the field — better to leave it
+      // null than to crash the entire batch with "Cannot convert String to Int32".
+      const label = String(value).trim();
+      if (!label) return undefined;
+      const opts = f.choiceOptions ?? [];
+      const hit = opts.find((o) => o.label.localeCompare(label, undefined, { sensitivity: "accent" }) === 0);
+      if (hit) return hit.value;
+      // Numeric value already? (Access "Limit to List" off can pass through raw ints.)
+      const asNum = Number(label);
+      if (Number.isFinite(asNum) && opts.some((o) => o.value === asNum)) return asNum;
+      // eslint-disable-next-line no-console
+      console.warn(`[dataLoader] Unknown Choice label "${label}" for ${f.accessTable}.${f.accessColumn}; dropping value.`);
+      return undefined;
+    }
     default:
       return String(value);
   }

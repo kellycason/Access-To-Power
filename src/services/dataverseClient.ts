@@ -48,6 +48,23 @@ export interface SolutionOption {
   publisherName?: string;
 }
 
+export interface MigrationJobListItem {
+  migrationJobId: string;
+  name: string;
+  status: number;
+  targetSolutionName?: string;
+  targetPublisherPrefix?: string;
+  createdOn?: string;
+  modifiedOn?: string;
+}
+
+export interface MigrationAnnotationInfo {
+  annotationId: string;
+  fileName: string;
+  mimeType?: string;
+  createdOn?: string;
+}
+
 export interface DataverseClient {
   /** Resolve environment URL + tenant for the helper protocol launch. */
   getContext(): Promise<{ environmentUrl: string; tenantId: string }>;
@@ -76,6 +93,37 @@ export interface DataverseClient {
 
   /** Existing unmanaged solutions that can receive migrated tables. */
   listSolutions(): Promise<SolutionOption[]>;
+
+  /**
+   * Every publisher customizationprefix in this environment (lowercased). Used
+   * by the Connect step to refuse a new prefix that is already taken by ANY
+   * publisher — including managed-solution publishers and orphan publishers
+   * that listSolutions() filters out. Without this check the helper would later
+   * fail on solution creation with a confusing duplicate-prefix error.
+   */
+  listAllPublisherPrefixes(): Promise<string[]>;
+
+  /** All migration jobs in the environment, newest first. */
+  listMigrationJobs(): Promise<MigrationJobListItem[]>;
+
+  /** Returns the migration report annotation as parsed JSON if present. */
+  tryGetMigrationReport(migrationJobId: string): Promise<unknown | null>;
+
+  /** Returns the helper's MDA generation result (mda-result.json) if present. */
+  tryGetMdaResult(migrationJobId: string): Promise<MdaResultDoc | null>;
+
+  /** Returns the helper's MDA generation progress log (NDJSON) if present. */
+  tryGetMdaLog(migrationJobId: string): Promise<string | null>;
+
+  /** Returns metadata for all annotations attached to a migration job. */
+  listJobAnnotations(migrationJobId: string): Promise<MigrationAnnotationInfo[]>;
+}
+
+export interface MdaResultDoc {
+  appModuleId: string;
+  appUniqueName: string;
+  playUrl: string;
+  generatedAt?: string;
 }
 
 /* ----------------------------------------------------------------------- */
@@ -86,10 +134,26 @@ const ACCESS_TOPOWER_JOB_SET = "acp_migrationjobs";
 const ANNOTATION_SET = "annotations";
 const SOLUTION_SET = "solutions";
 const PUBLISHER_SET = "publishers";
+const SITEMAP_SET = "sitemaps";
+const APPMODULE_SET = "appmodules";
+
+export { SITEMAP_SET, APPMODULE_SET };
 const SOLUTIONS_CACHE_PREFIX = "acp_solution_options_v2";
 const SOLUTIONS_CACHE_MS = 5 * 60 * 1000;
 
-const powerAppsDataClient = getClient({
+// The Power Apps SDK uses a singleton `PowerDataSourcesInfoProvider` that is
+// initialized on the first `getClient()` call and stores a *reference* to the
+// config object. Subsequent `getClient()` calls don't update it. To register
+// migrated tables at runtime (e.g. for MDA generation against the user's freshly
+// migrated entities) we keep a reference to the original config and mutate it.
+type PowerAppsDataSourceEntry = {
+  tableId: string;
+  version: string;
+  primaryKey: string;
+  dataSourceType: "Dataverse";
+  apis: Record<string, never>;
+};
+const dataSourcesInfo: Record<string, PowerAppsDataSourceEntry> = {
   [ACCESS_TOPOWER_JOB_SET]: {
     tableId: "",
     version: "",
@@ -118,7 +182,44 @@ const powerAppsDataClient = getClient({
     dataSourceType: "Dataverse",
     apis: {},
   },
-});
+  [SITEMAP_SET]: {
+    tableId: "",
+    version: "",
+    primaryKey: "sitemapid",
+    dataSourceType: "Dataverse",
+    apis: {},
+  },
+  [APPMODULE_SET]: {
+    tableId: "",
+    version: "",
+    primaryKey: "appmoduleid",
+    dataSourceType: "Dataverse",
+    apis: {},
+  },
+};
+const powerAppsDataClient = getClient(dataSourcesInfo);
+
+/**
+ * Registers a Dataverse table with the SDK runtime so it can be used as a
+ * `tableName` in `executeAsync`/CRUD calls. Safe to call multiple times.
+ *
+ * @param tableName Singular logical name OR entity-set name. The SDK matches
+ *   on whatever string you pass to `executeAsync({ ... tableName })`, so use
+ *   the same string here that you'll use at the call site.
+ * @param primaryKey Optional. Defaults to `<tableName>id`.
+ */
+export function registerDataSource(tableName: string, primaryKey?: string): void {
+  if (dataSourcesInfo[tableName]) return;
+  dataSourcesInfo[tableName] = {
+    tableId: "",
+    version: "",
+    primaryKey: primaryKey ?? `${tableName}id`,
+    dataSourceType: "Dataverse",
+    apis: {},
+  };
+}
+
+export { powerAppsDataClient };
 
 interface MigrationJobRow {
   acp_migrationjobid: string;
@@ -126,11 +227,16 @@ interface MigrationJobRow {
   acp_status?: number;
   acp_targetsolutionname?: string;
   acp_targetpublisherprefix?: string;
+  createdon?: string;
+  modifiedon?: string;
 }
 
 interface AnnotationRow {
   annotationid: string;
   documentbody?: string;
+  filename?: string;
+  mimetype?: string;
+  createdon?: string;
 }
 
 interface SolutionRow {
@@ -346,6 +452,105 @@ export class PowerAppsSdkDataverseClient implements DataverseClient {
     writeCachedSolutions(cacheKey, solutions);
     return solutions;
   }
+
+  async listAllPublisherPrefixes(): Promise<string[]> {
+    const result = await powerAppsDataClient.retrieveMultipleRecordsAsync<PublisherRow>(PUBLISHER_SET, {
+      select: ["customizationprefix"],
+    });
+    const rows = assertOperation(result, "list publisher prefixes");
+    return Array.from(
+      new Set(
+        rows
+          .map((p) => (p.customizationprefix ?? "").trim().toLowerCase())
+          .filter((p) => p.length > 0),
+      ),
+    );
+  }
+
+  async listMigrationJobs(): Promise<MigrationJobListItem[]> {
+    const result = await powerAppsDataClient.retrieveMultipleRecordsAsync<MigrationJobRow>(
+      ACCESS_TOPOWER_JOB_SET,
+      {
+        select: [
+          "acp_migrationjobid",
+          "acp_name",
+          "acp_status",
+          "acp_targetsolutionname",
+          "acp_targetpublisherprefix",
+          "createdon",
+          "modifiedon",
+        ],
+        orderBy: ["createdon desc"],
+        top: 200,
+      },
+    );
+    const rows = assertOperation(result, "list migration jobs");
+    return rows.map((row) => ({
+      migrationJobId: row.acp_migrationjobid,
+      name: row.acp_name,
+      status: row.acp_status ?? 1,
+      targetSolutionName: row.acp_targetsolutionname,
+      targetPublisherPrefix: row.acp_targetpublisherprefix,
+      createdOn: row.createdon,
+      modifiedOn: row.modifiedon,
+    }));
+  }
+
+  async tryGetMigrationReport(migrationJobId: string): Promise<unknown | null> {
+    const annotation = await this.findAnnotationByName(
+      migrationJobId,
+      "migration-report.json",
+      ["annotationid", "documentbody"],
+    );
+    if (!annotation?.documentbody) return null;
+    try {
+      return JSON.parse(decodeBase64Utf8(annotation.documentbody));
+    } catch {
+      return null;
+    }
+  }
+
+  async tryGetMdaResult(migrationJobId: string): Promise<MdaResultDoc | null> {
+    const annotation = await this.findAnnotationByName(
+      migrationJobId,
+      "mda-result.json",
+      ["annotationid", "documentbody"],
+    );
+    if (!annotation?.documentbody) return null;
+    try {
+      return JSON.parse(decodeBase64Utf8(annotation.documentbody)) as MdaResultDoc;
+    } catch {
+      return null;
+    }
+  }
+
+  async tryGetMdaLog(migrationJobId: string): Promise<string | null> {
+    const annotation = await this.findAnnotationByName(migrationJobId, "mda-log.ndjson", ["annotationid", "documentbody"]);
+    if (!annotation?.documentbody) return null;
+    try {
+      return decodeBase64Utf8(annotation.documentbody);
+    } catch {
+      return null;
+    }
+  }
+
+  async listJobAnnotations(migrationJobId: string): Promise<MigrationAnnotationInfo[]> {
+    const result = await powerAppsDataClient.retrieveMultipleRecordsAsync<AnnotationRow>(ANNOTATION_SET, {
+      select: ["annotationid", "filename", "mimetype", "createdon"],
+      filter: `_objectid_value eq ${migrationJobId}`,
+      orderBy: ["createdon desc"],
+      top: 50,
+    });
+    const rows = assertOperation(result, "list annotations");
+    return rows
+      .filter((r) => r.filename)
+      .map((r) => ({
+        annotationId: r.annotationid,
+        fileName: r.filename!,
+        mimeType: r.mimetype,
+        createdOn: r.createdon,
+      }));
+  }
 }
 
 export class WebApiDataverseClient implements DataverseClient {
@@ -525,6 +730,94 @@ export class WebApiDataverseClient implements DataverseClient {
       .sort(compareSolutions);
     writeCachedSolutions(cacheKey, solutions);
     return solutions;
+  }
+
+  async listAllPublisherPrefixes(): Promise<string[]> {
+    const resp = await this.fetch("publishers?$select=customizationprefix");
+    const body = (await resp.json()) as { value: Array<{ customizationprefix?: string }> };
+    return Array.from(
+      new Set(
+        body.value
+          .map((p) => (p.customizationprefix ?? "").trim().toLowerCase())
+          .filter((p) => p.length > 0),
+      ),
+    );
+  }
+
+  async listMigrationJobs(): Promise<MigrationJobListItem[]> {
+    const resp = await this.fetch(
+      `${ACCESS_TOPOWER_JOB_SET}?$select=acp_migrationjobid,acp_name,acp_status,acp_targetsolutionname,acp_targetpublisherprefix,createdon,modifiedon&$orderby=createdon desc&$top=200`,
+    );
+    const body = (await resp.json()) as { value: MigrationJobRow[] };
+    return body.value.map((row) => ({
+      migrationJobId: row.acp_migrationjobid,
+      name: row.acp_name,
+      status: row.acp_status ?? 1,
+      targetSolutionName: row.acp_targetsolutionname,
+      targetPublisherPrefix: row.acp_targetpublisherprefix,
+      createdOn: row.createdon,
+      modifiedOn: row.modifiedon,
+    }));
+  }
+
+  async tryGetMigrationReport(migrationJobId: string): Promise<unknown | null> {
+    const filter = `_objectid_value eq ${migrationJobId} and filename eq 'migration-report.json'`;
+    const resp = await this.fetch(
+      `annotations?$select=annotationid,documentbody&$filter=${encodeURIComponent(filter)}&$top=1`,
+    );
+    const body = (await resp.json()) as { value: AnnotationRow[] };
+    const row = body.value[0];
+    if (!row?.documentbody) return null;
+    try {
+      return JSON.parse(decodeBase64Utf8(row.documentbody));
+    } catch {
+      return null;
+    }
+  }
+
+  async tryGetMdaResult(migrationJobId: string): Promise<MdaResultDoc | null> {
+    const filter = `_objectid_value eq ${migrationJobId} and filename eq 'mda-result.json'`;
+    const resp = await this.fetch(
+      `annotations?$select=annotationid,documentbody&$filter=${encodeURIComponent(filter)}&$top=1`,
+    );
+    const body = (await resp.json()) as { value: AnnotationRow[] };
+    const row = body.value[0];
+    if (!row?.documentbody) return null;
+    try {
+      return JSON.parse(decodeBase64Utf8(row.documentbody)) as MdaResultDoc;
+    } catch {
+      return null;
+    }
+  }
+
+  async tryGetMdaLog(migrationJobId: string): Promise<string | null> {
+    const filter = `_objectid_value eq ${migrationJobId} and filename eq 'mda-log.ndjson'`;
+    const resp = await this.fetch(
+      `annotations?$select=annotationid,documentbody&$filter=${encodeURIComponent(filter)}&$top=1`,
+    );
+    const body = (await resp.json()) as { value: AnnotationRow[] };
+    const row = body.value[0];
+    if (!row?.documentbody) return null;
+    try {
+      return decodeBase64Utf8(row.documentbody);
+    } catch {
+      return null;
+    }
+  }
+
+  async listJobAnnotations(migrationJobId: string): Promise<MigrationAnnotationInfo[]> {
+    const resp = await this.fetch(
+      `annotations?$select=annotationid,filename,mimetype,createdon&$filter=_objectid_value eq ${migrationJobId}&$orderby=createdon desc&$top=50`,
+    );
+    const body = (await resp.json()) as { value: AnnotationRow[] };
+    return body.value
+      .filter((r) => r.filename)
+      .map((r) => ({
+        annotationId: r.annotationid,
+        fileName: r.filename!,
+        mimeType: r.mimetype,
+        createdOn: r.createdon,
+      }));
   }
 
   private async fetch(path: string, init: RequestInit = {}): Promise<Response> {
@@ -710,6 +1003,37 @@ export class MockDataverseClient implements DataverseClient {
         publisherName: "Northwind",
       },
     ];
+  }
+
+  async listAllPublisherPrefixes(): Promise<string[]> {
+    return ["acp", "nw"];
+  }
+
+  async listMigrationJobs(): Promise<MigrationJobListItem[]> {
+    const state = this.read();
+    return Object.entries(state.jobs).map(([id, job]) => ({
+      migrationJobId: id,
+      name: job.name,
+      status: job.status,
+      targetSolutionName: job.targetSolutionName,
+      targetPublisherPrefix: job.targetPublisherPrefix,
+    }));
+  }
+
+  async tryGetMigrationReport(_migrationJobId: string): Promise<unknown | null> {
+    return null;
+  }
+
+  async tryGetMdaResult(_migrationJobId: string): Promise<MdaResultDoc | null> {
+    return null;
+  }
+
+  async tryGetMdaLog(_migrationJobId: string): Promise<string | null> {
+    return null;
+  }
+
+  async listJobAnnotations(_migrationJobId: string): Promise<MigrationAnnotationInfo[]> {
+    return [];
   }
 
   private read(): MockState {

@@ -1,32 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Button,
-  Body1,
-  Caption1,
-  MessageBar,
-  MessageBarBody,
-  Title3,
-  Subtitle2,
-  Table,
-  TableBody,
-  TableCell,
-  TableHeader,
-  TableHeaderCell,
-  TableRow,
-  Dropdown,
-  Combobox,
-  Option,
-  Input,
-  Field,
-  Checkbox,
-  Radio,
-  RadioGroup,
-  Tab,
-  TabList,
-  Spinner,
-  tokens,
-  makeStyles,
-} from "@fluentui/react-components";
+import { Alert } from "../ui/Alert";
+import { Button } from "../ui/Button";
+import { Card } from "../ui/Card";
+import { Checkbox } from "../ui/Checkbox";
+import { ConfirmModal } from "../ui/Modal";
+import { HelperLaunchModal } from "../ui/HelperLaunchModal";
+import { HelperWaitingPanel } from "../ui/HelperWaitingPanel";
+import { Input } from "../ui/Input";
+import { Select } from "../ui/Select";
+import { Spinner } from "../ui/Spinner";
+import { Table, THead, TBody, TR, TH, TD } from "../ui/Table";
+import { Tooltip, InfoIcon } from "../ui/Tooltip";
+import { cx } from "../ui/cx";
 import {
   listExistingDataverseTables,
   suggestExistingColumnMappings,
@@ -46,10 +31,6 @@ import type {
   TableMapping,
 } from "../types/manifest";
 
-// Only types the schema creator can actually build end-to-end for a new column.
-// - Lookup: created automatically from detected FKs/relationships, not user-pickable here.
-// - Uniqueidentifier: only the system primary key can have this type.
-// - Choice: requires option-set authoring + per-row value mapping (planned, not yet supported).
 const DV_TYPES: DataverseAttributeType[] = [
   "String",
   "Memo",
@@ -62,66 +43,49 @@ const DV_TYPES: DataverseAttributeType[] = [
   "Boolean",
 ];
 
-const useStyles = makeStyles({
-  page: { display: "flex", flexDirection: "column", gap: "16px" },
-  tabs: { marginBottom: "8px" },
-  targetCard: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: "16px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
-    backgroundColor: tokens.colorNeutralBackground1,
-  },
-  targetHeader: { display: "flex", flexDirection: "column", gap: "2px" },
-  modeChoice: {
-    display: "grid",
-    gridTemplateColumns: "1fr 1fr",
-    gap: "12px",
-  },
-  modeOption: {
-    border: `1px solid ${tokens.colorNeutralStroke2}`,
-    borderRadius: tokens.borderRadiusMedium,
-    padding: "12px 14px",
-    cursor: "pointer",
-    display: "flex",
-    flexDirection: "column",
-    gap: "2px",
-    transitionProperty: "border-color, background-color",
-    transitionDuration: tokens.durationFast,
-    ":hover": { backgroundColor: tokens.colorNeutralBackground1Hover },
-  },
-  modeOptionSelected: {
-    border: `1px solid ${tokens.colorBrandStroke1}`,
-    backgroundColor: tokens.colorBrandBackground2,
-  },
-  modeRadioRow: { display: "flex", alignItems: "center", gap: "8px" },
-  modeBody: {
-    paddingTop: "4px",
-    borderTop: `1px solid ${tokens.colorNeutralStroke2}`,
-    display: "flex",
-    flexDirection: "column",
-    gap: "12px",
-  },
-  modeBodyRow: {
-    display: "grid",
-    gridTemplateColumns: "minmax(260px, 420px) 1fr",
-    gap: "12px",
-    alignItems: "end",
-  },
-  actions: { display: "flex", justifyContent: "space-between" },
-});
+/**
+ * User-facing labels for each Dataverse attribute type. We keep the internal
+ * identifiers (used in plan JSON + schema creator) but render the names a
+ * Power Apps maker would recognize from the "Add column" experience —
+ * otherwise mapping looks like a code mode dump.
+ */
+const DV_TYPE_LABELS: Record<DataverseAttributeType, string> = {
+  String: "Text",
+  Memo: "Multiline Text",
+  Integer: "Whole Number",
+  BigInt: "Big Integer",
+  Decimal: "Decimal Number",
+  Money: "Currency",
+  Double: "Float Number",
+  DateTime: "Date and Time",
+  DateOnly: "Date Only",
+  Boolean: "Yes/No",
+  Lookup: "Lookup",
+  Choice: "Choice",
+  Uniqueidentifier: "Unique Identifier",
+};
+
+/**
+ * Dataverse only accepts these attribute types as alternate-key components.
+ * Memo, Money, Double, Boolean, File, Lookup-on-self, etc. are not eligible.
+ */
+const ALT_KEY_ELIGIBLE_TYPES: DataverseAttributeType[] = [
+  "String",
+  "Integer",
+  "DateTime",
+  "Decimal",
+];
 
 function filterTables(tables: ExistingDataverseTable[], query: string): ExistingDataverseTable[] {
   const q = query.trim().toLowerCase();
   if (!q) return tables.slice(0, 200);
   return tables
-    .filter((t) =>
-      t.logicalName.toLowerCase().includes(q) ||
-      t.schemaName.toLowerCase().includes(q) ||
-      t.displayName.toLowerCase().includes(q) ||
-      t.displayCollectionName.toLowerCase().includes(q),
+    .filter(
+      (t) =>
+        t.logicalName.toLowerCase().includes(q) ||
+        t.schemaName.toLowerCase().includes(q) ||
+        t.displayName.toLowerCase().includes(q) ||
+        t.displayCollectionName.toLowerCase().includes(q),
     )
     .slice(0, 200);
 }
@@ -134,18 +98,22 @@ interface Props {
   onBack: () => void;
 }
 
-/**
- * Step 3 — Map. User reviews + edits the proposed mapping per table.
- */
 export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, onBack }: Props) {
-  const styles = useStyles();
-  const defaultPlan = useMemo(() => buildDefaultPlan(manifest, "acp"), [manifest]);
-  const [plan, setPlan] = useState<MigrationPlan>(
-    () => initialPlan ?? defaultPlan,
+  // The publisher prefix the user chose in the Connect step. We have to fetch
+  // it from the migration job because the prefix gets baked into every new
+  // table's schema name (publisher prefix => tables: `${prefix}_categories`).
+  // Until the prefix is known we fall back to "acp" so the wizard still
+  // renders, but we re-build the default plan once the real prefix arrives
+  // (see effect below). If the user is resuming with an existing plan, the
+  // prefix is already encoded in the saved schema names and no rebuild needed.
+  const [publisherPrefix, setPublisherPrefix] = useState<string>("acp");
+  const [prefixLoaded, setPrefixLoaded] = useState<boolean>(initialPlan != null);
+  const defaultPlan = useMemo(
+    () => buildDefaultPlan(manifest, publisherPrefix),
+    [manifest, publisherPrefix],
   );
-  const [activeTable, setActiveTable] = useState<string>(
-    plan.tableMappings[0]?.accessTable ?? "",
-  );
+  const [plan, setPlan] = useState<MigrationPlan>(() => initialPlan ?? defaultPlan);
+  const [activeTable, setActiveTable] = useState<string>(plan.tableMappings[0]?.accessTable ?? "");
   const [envUrl, setEnvUrl] = useState<string | null>(null);
   const [existingTables, setExistingTables] = useState<ExistingDataverseTable[]>([]);
   const [tablesLoaded, setTablesLoaded] = useState(false);
@@ -157,11 +125,12 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [matchStatus, setMatchStatus] = useState<Record<string, string>>({});
   const snapshotPollTimer = useRef<number | null>(null);
-  const [tableQuery, setTableQuery] = useState<string>(() =>
-    initialPlan?.tableMappings.find((t) => t.accessTable === (initialPlan.tableMappings[0]?.accessTable ?? ""))?.targetMode === "existing"
-      ? `${initialPlan.tableMappings[0].dataverseDisplayName} (${initialPlan.tableMappings[0].dataverseSchemaName})`
-      : "",
+  const [tableQuery, setTableQuery] = useState<string>("");
+  const [pendingStandardTable, setPendingStandardTable] = useState<ExistingDataverseTable | null>(
+    null,
   );
+  const [snapshotLaunchUrl, setSnapshotLaunchUrl] = useState<string | null>(null);
+  const [snapshotModalOpen, setSnapshotModalOpen] = useState(false);
 
   useEffect(() => {
     if (!plan.tableMappings.find((t) => t.accessTable === activeTable)) {
@@ -171,16 +140,37 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
 
   const current = plan.tableMappings.find((t) => t.accessTable === activeTable);
 
+  // Detect plan-vs-environment collisions: any "create new" mapping whose
+  // logical name is already in use by another table in this environment.
+  // Without this check the helper would silently merge migrated rows into the
+  // existing table (we have hit this before with leftover acp_order rows from
+  // a prior run getting augmented instead of replaced).
+  const newTableCollisions = useMemo<Record<string, ExistingDataverseTable>>(() => {
+    if (!tablesLoaded || existingTables.length === 0) return {};
+    const byLogical = new Map(existingTables.map((t) => [t.logicalName.toLowerCase(), t]));
+    const out: Record<string, ExistingDataverseTable> = {};
+    for (const t of plan.tableMappings) {
+      if (t.action === "Skip") continue;
+      if (t.targetMode === "existing") continue;
+      const ln = t.dataverseSchemaName?.toLowerCase().trim();
+      if (!ln) continue;
+      const match = byLogical.get(ln);
+      if (match) out[t.accessTable] = match;
+    }
+    return out;
+  }, [plan, existingTables, tablesLoaded]);
+
   const isPlanValid = useMemo(
     () =>
       plan.tableMappings.every(
         (t) => t.action === "Skip" || t.targetMode !== "existing" || Boolean(t.dataverseSchemaName),
-      ),
-    [plan],
+      ) && Object.keys(newTableCollisions).length === 0,
+    [plan, newTableCollisions],
   );
 
   const existingTableColumns = useMemo<SchemaSnapshotColumn[]>(() => {
-    if (!current || current.targetMode !== "existing" || !current.dataverseSchemaName || !snapshot) return [];
+    if (!current || current.targetMode !== "existing" || !current.dataverseSchemaName || !snapshot)
+      return [];
     const table = snapshot.tables.find((t) => t.logicalName === current.dataverseSchemaName);
     if (!table) return [];
     return table.columns
@@ -190,34 +180,89 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
 
   useEffect(() => {
     let cancelled = false;
-    getDataverseClient().getContext()
+    getDataverseClient()
+      .getContext()
       .then((context) => {
         if (!cancelled) setEnvUrl(context.environmentUrl);
       })
       .catch(() => {
         if (!cancelled) setEnvUrl(null);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, []);
+
+  // Fetch the publisher prefix from the migration job. Don't refetch when
+  // resuming from a saved plan — the prefix is already baked into its schema
+  // names and replacing them would silently lose the user's edits.
+  useEffect(() => {
+    if (initialPlan) {
+      setPrefixLoaded(true);
+      return;
+    }
+    if (!migrationJobId) return;
+    let cancelled = false;
+    getDataverseClient()
+      .getJob(migrationJobId)
+      .then((job) => {
+        if (cancelled) return;
+        const p = (job.targetPublisherPrefix || "acp").toLowerCase();
+        setPublisherPrefix(p);
+        setPrefixLoaded(true);
+      })
+      .catch(() => {
+        if (!cancelled) setPrefixLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [migrationJobId, initialPlan]);
+
+  // Once the real prefix arrives (and no saved plan was passed in), rebuild
+  // the default plan so every new table's schema name uses the right prefix
+  // (e.g. `pp_categories` instead of the hardcoded `acp_categories`).
+  useEffect(() => {
+    if (initialPlan) return;
+    if (!prefixLoaded) return;
+    setPlan(buildDefaultPlan(manifest, publisherPrefix));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefixLoaded, publisherPrefix]);
 
   useEffect(() => {
     if (!migrationJobId) return;
     let cancelled = false;
-    getDataverseClient().tryGetSchemaSnapshot(migrationJobId)
+    getDataverseClient()
+      .tryGetSchemaSnapshot(migrationJobId)
       .then((snap) => {
         if (!cancelled) setSnapshot(snap);
       })
       .catch(() => {
         if (!cancelled) setSnapshot(null);
       });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+    };
   }, [migrationJobId]);
 
-  useEffect(() => () => {
-    if (snapshotPollTimer.current) window.clearInterval(snapshotPollTimer.current);
-  }, []);
+  useEffect(
+    () => () => {
+      if (snapshotPollTimer.current) window.clearInterval(snapshotPollTimer.current);
+    },
+    [],
+  );
 
-  // Keep the combobox text in sync when the user switches tabs or modes externally.
+  // Eagerly load the list of existing Dataverse tables as soon as we have a
+  // schema snapshot. This is needed so the collision check (see
+  // newTableCollisions) can run BEFORE the user opens the "use existing" picker
+  // for any table. Otherwise a silent reuse of an existing table would only be
+  // caught after the helper fails (and only thanks to the hard-fail guard).
+  useEffect(() => {
+    if (!snapshot) return;
+    void loadExistingTables();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [snapshot?.tables.length]);
+
   useEffect(() => {
     if (!current) {
       setTableQuery("");
@@ -244,11 +289,8 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
       url.searchParams.set("tenant", tenantId);
       url.searchParams.set("name", jobSnap.name);
       url.searchParams.set("mode", "snapshot");
-      window.location.href = url.toString();
-      setCapturingSnapshot(true);
-      setSnapshotMissing(false);
-      setMatchStatus((prev) => ({ ...prev }));
-      startSnapshotPolling();
+      setSnapshotLaunchUrl(url.toString());
+      setSnapshotModalOpen(true);
     } catch (e) {
       setSnapshotError(e instanceof Error ? e.message : String(e));
     }
@@ -289,7 +331,6 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
     setLoadingTables(true);
     setTableListError(null);
     try {
-      // Always re-check the snapshot on dropdown open— the helper may have just uploaded it.
       const liveSnap = snapshot ?? (await refreshSnapshot());
       const context = envUrl ? { environmentUrl: envUrl } : await getDataverseClient().getContext();
       setEnvUrl(context.environmentUrl);
@@ -310,35 +351,22 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
 
   async function selectExistingTable(table: ExistingDataverseTable) {
     if (!current) return;
-    // Informational confirm before mapping into a system (non-custom) entity.
-    // Consolidating multiple Access DBs into a shared standard table (e.g.
-    // `product`, `account`, `contact`) is a legitimate scenario — we just
-    // want the user to acknowledge that any custom columns from the Access
-    // table will be added to that standard table.
     if (!table.isCustomEntity) {
-      const proceed = window.confirm(
-        `'${table.displayName}' (${table.logicalName}) is a standard Dataverse table.\n\n` +
-          `Rows from '${current.accessTable}' will be loaded into it, and any Access columns that don't already exist will be added as new custom columns on the standard table.\n\n` +
-          `This is a great way to consolidate multiple Access databases into one shared table — just make sure that's what you intend.\n\n` +
-          `Continue?`,
-      );
-      if (!proceed) {
-        setMatchStatus((prev) => ({
-          ...prev,
-          [current.accessTable]: `Cancelled mapping to ${table.displayName}.`,
-        }));
-        return;
-      }
+      setPendingStandardTable(table);
+      return;
     }
+    await applyExistingTable(table);
+  }
+
+  async function applyExistingTable(table: ExistingDataverseTable) {
+    if (!current) return;
     const context = envUrl ? { environmentUrl: envUrl } : await getDataverseClient().getContext();
     setEnvUrl(context.environmentUrl);
-    setMatchStatus((prev) => ({ ...prev, [current.accessTable]: `Mapping columns to ${table.displayName}...` }));
-    suggestExistingColumnMappings(
-      context.environmentUrl,
-      table.logicalName,
-      current.fields,
-      snapshot,
-    )
+    setMatchStatus((prev) => ({
+      ...prev,
+      [current.accessTable]: `Mapping columns to ${table.displayName}...`,
+    }));
+    suggestExistingColumnMappings(context.environmentUrl, table.logicalName, current.fields, snapshot)
       .then((found) => {
         updateTable({
           ...current,
@@ -349,12 +377,16 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
           dataverseEntitySetName: table.entitySetName,
           fields: found,
         });
-        setMatchStatus((prev) => ({ ...prev, [current.accessTable]: `Using existing table ${table.displayName}.` }));
+        setMatchStatus((prev) => ({
+          ...prev,
+          [current.accessTable]: `Using existing table ${table.displayName}.`,
+        }));
       })
       .catch(() => {
         setMatchStatus((prev) => ({
           ...prev,
-          [current.accessTable]: "Could not inspect columns for that existing table. Try another table or create a new Dataverse table.",
+          [current.accessTable]:
+            "Could not inspect columns for that existing table. Try another table or create a new Dataverse table.",
         }));
       });
   }
@@ -362,9 +394,7 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
   function updateTable(next: TableMapping) {
     setPlan({
       ...plan,
-      tableMappings: plan.tableMappings.map((t) =>
-        t.accessTable === next.accessTable ? next : t,
-      ),
+      tableMappings: plan.tableMappings.map((t) => (t.accessTable === next.accessTable ? next : t)),
     });
   }
 
@@ -400,377 +430,550 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
     void loadExistingTables();
   }
 
+  if (!prefixLoaded) {
+    return (
+      <Card>
+        <div className="flex items-center gap-3 text-ink-500">
+          <Spinner /> Loading migration job…
+        </div>
+      </Card>
+    );
+  }
+
   return (
-    <div className={styles.page}>
-      <Title3>Map Access → Dataverse</Title3>
-      <Body1>
-        Review the proposed schema. Edit names, types, and which columns to
-        skip. Decisions are stored on the migration job in Dataverse.
-      </Body1>
-      <TabList
-        className={styles.tabs}
-        selectedValue={activeTable}
-        onTabSelect={(_e, d) => setActiveTable(String(d.value))}
-      >
-        {plan.tableMappings.map((t) => (
-          <Tab key={t.accessTable} value={t.accessTable}>
-            {t.accessTable}
-          </Tab>
-        ))}
-      </TabList>
+    <div className="space-y-5">
+      {Object.keys(newTableCollisions).length > 0 && (
+        <Alert intent="warning">
+          {Object.keys(newTableCollisions).length === 1 ? (
+            <>
+              The Access table <strong>{Object.keys(newTableCollisions)[0]}</strong> is set to create
+              a new Dataverse table, but that name is already taken in this environment. Resolve it
+              below before you continue.
+            </>
+          ) : (
+            <>
+              {Object.keys(newTableCollisions).length} tables are set to be created new, but their
+              names are already taken in this environment:{" "}
+              <strong>{Object.keys(newTableCollisions).join(", ")}</strong>. Resolve each one below
+              before you continue.
+            </>
+          )}
+        </Alert>
+      )}
+
+      {/* Tabs strip */}
+      <div className="flex gap-1 overflow-x-auto bg-white border border-ink-200 rounded-xl p-1">
+        {plan.tableMappings.map((t) => {
+          const isActive = t.accessTable === activeTable;
+          const hasCollision = Boolean(newTableCollisions[t.accessTable]);
+          return (
+            <button
+              key={t.accessTable}
+              onClick={() => setActiveTable(t.accessTable)}
+              className={cx(
+                "px-3 py-2 rounded-lg text-sm whitespace-nowrap transition focus-ring",
+                isActive
+                  ? "bg-brand-50 text-brand-700 font-semibold"
+                  : "text-ink-600 hover:bg-ink-50 hover:text-ink-900",
+                hasCollision && !isActive && "text-amber-700",
+                hasCollision && isActive && "bg-amber-50 text-amber-800",
+              )}
+            >
+              {hasCollision ? "\u26A0 " : ""}
+              {t.accessTable}
+            </button>
+          );
+        })}
+      </div>
+
       {current && (
         <>
-          <div className={styles.targetCard}>
-            <div className={styles.targetHeader}>
-              <Subtitle2>Where should &ldquo;{current.accessTable}&rdquo; land in Dataverse?</Subtitle2>
-              <Caption1>Pick one. You can change this any time before migrating.</Caption1>
+          <Card>
+            <div className="mb-3">
+              <div className="text-base font-semibold text-ink-900">
+                Where should &ldquo;{current.accessTable}&rdquo; land in Dataverse?
+              </div>
+              <div className="text-sm text-ink-500 mt-0.5">
+                Pick one. You can change this any time before migrating.
+              </div>
             </div>
-            <RadioGroup
-              layout="horizontal"
-              value={current.targetMode}
-              onChange={(_e, d) => {
-                if (d.value === "new") selectNewTable();
-                else if (d.value === "existing") switchToExistingMode();
-              }}
-            >
-              <div
-                className={`${styles.modeOption}${current.targetMode === "new" ? " " + styles.modeOptionSelected : ""}`}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <ModeTile
+                active={current.targetMode === "new"}
                 onClick={() => selectNewTable()}
-                role="button"
-                tabIndex={-1}
-              >
-                <div className={styles.modeRadioRow}>
-                  <Radio value="new" label="Create a new Dataverse table" />
-                </div>
-                <Caption1 style={{ paddingLeft: 28 }}>
-                  We&rsquo;ll create the table and all its columns when you migrate.
-                </Caption1>
-              </div>
-              <div
-                className={`${styles.modeOption}${current.targetMode === "existing" ? " " + styles.modeOptionSelected : ""}`}
+                title="Create a new Dataverse table"
+                description="We'll create the table and all its columns when you migrate."
+              />
+              <ModeTile
+                active={current.targetMode === "existing"}
                 onClick={() => switchToExistingMode()}
-                role="button"
-                tabIndex={-1}
-              >
-                <div className={styles.modeRadioRow}>
-                  <Radio value="existing" label="Use an existing Dataverse table" />
-                </div>
-                <Caption1 style={{ paddingLeft: 28 }}>
-                  Map your Access columns into a table that already lives in this environment.
-                </Caption1>
-              </div>
-            </RadioGroup>
+                title="Use an existing Dataverse table"
+                description="Map your Access columns into a table that already lives in this environment."
+              />
+            </div>
 
             {current.targetMode === "new" && (
-              <div className={styles.modeBody}>
-                <div className={styles.modeBodyRow}>
-                  <Field label="Schema name" hint="This will be the new table's logical name.">
-                    <Input
-                      value={current.dataverseSchemaName}
-                      onChange={(_e, d) =>
-                        updateTable({ ...current, dataverseSchemaName: d.value })
-                      }
-                    />
-                  </Field>
-                  <Field label="Display name">
-                    <Input
-                      value={current.dataverseDisplayName}
-                      onChange={(_e, d) =>
-                        updateTable({ ...current, dataverseDisplayName: d.value })
-                      }
-                    />
-                  </Field>
-                </div>
-                {current.dataverseDisplayName &&
-                  current.accessTable &&
-                  current.dataverseDisplayName.toLowerCase() !== current.accessTable.toLowerCase() && (
-                    <Caption1>
-                      Renamed <strong>{current.accessTable}</strong> &rarr;{" "}
-                      <strong>{current.dataverseDisplayName}</strong> (singular) so the Dataverse
-                      OData path becomes <code>/{current.dataverseSchemaName}s</code> instead of{" "}
-                      <code>/{current.dataverseSchemaName}es</code>. Edit either field to override.
-                    </Caption1>
-                  )}
-                {matchStatus[current.accessTable] && (
-                  <Caption1>{matchStatus[current.accessTable]}</Caption1>
-                )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-4">
+                <Input
+                  label="Schema name"
+                  hint="This will be the new table's logical name."
+                  value={current.dataverseSchemaName}
+                  onChange={(e) => updateTable({ ...current, dataverseSchemaName: e.target.value })}
+                />
+                <Input
+                  label="Display name"
+                  value={current.dataverseDisplayName}
+                  onChange={(e) =>
+                    updateTable({ ...current, dataverseDisplayName: e.target.value })
+                  }
+                />
+              </div>
+            )}
+
+            {current.targetMode === "new" && newTableCollisions[current.accessTable] && (
+              <div className="mt-4">
+                <Alert
+                  intent="warning"
+                  actions={
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      onClick={() => {
+                        const match = newTableCollisions[current.accessTable];
+                        void applyExistingTable(match);
+                      }}
+                    >
+                      Use existing table
+                    </Button>
+                  }
+                >
+                  A table named <strong>{newTableCollisions[current.accessTable].logicalName}</strong>{" "}
+                  ({newTableCollisions[current.accessTable].displayName}) already exists in this
+                  environment. Creating it again would mix your Access data with whatever is already
+                  there. Either map into the existing table, or change the schema name (or pick a
+                  different publisher prefix on the Connect step) so a fresh table can be created.
+                </Alert>
               </div>
             )}
 
             {current.targetMode === "existing" && (
-              <div className={styles.modeBody}>
-                <Field
-                  label="Dataverse table"
-                  hint="Type to filter by display or logical name."
-                  required
-                  validationState={current.dataverseSchemaName ? "none" : "error"}
-                  validationMessage={current.dataverseSchemaName ? undefined : "Pick a Dataverse table to continue."}
-                >
-                  <Combobox
-                    placeholder="Select an existing Dataverse table"
-                    freeform
-                    clearable
-                    value={tableQuery}
-                    selectedOptions={current.dataverseSchemaName ? [current.dataverseSchemaName] : []}
-                    onChange={(e) => setTableQuery((e.target as HTMLInputElement).value)}
-                    onOptionSelect={(_e, d) => {
-                      const table = existingTables.find((candidate) => candidate.logicalName === d.optionValue);
-                      if (table) {
-                        setTableQuery(`${table.displayName} (${table.logicalName})`);
-                        void selectExistingTable(table);
-                      }
-                    }}
-                    onOpenChange={(_e, d) => {
-                      if (d.open) {
-                        void loadExistingTables();
-                        setTableQuery("");
-                      }
-                    }}
-                  >
-                    {loadingTables && (
-                      <Option disabled value="__loading" text="Loading tables...">
-                        Loading tables...
-                      </Option>
-                    )}
-                    {filterTables(existingTables, tableQuery).map((table) => (
-                      <Option
-                        key={table.logicalName}
-                        value={table.logicalName}
-                        text={`${table.displayName} (${table.logicalName})`}
-                      >
-                        {table.displayName} ({table.logicalName})
-                      </Option>
-                    ))}
-                    {!loadingTables && existingTables.length > 0 && filterTables(existingTables, tableQuery).length === 0 && (
-                      <Option disabled value="__nomatch" text="No matching tables">
-                        No matching tables
-                      </Option>
-                    )}
-                  </Combobox>
-                </Field>
-                <Caption1>
-                  {matchStatus[current.accessTable] ?? "Choose the table you want to map your Access columns into."}
-                </Caption1>
+              <div className="mt-4 space-y-3">
+                <ExistingTablePicker
+                  tableQuery={tableQuery}
+                  setTableQuery={setTableQuery}
+                  loadingTables={loadingTables}
+                  tables={existingTables}
+                  onOpen={() => void loadExistingTables()}
+                  onSelect={(table) => void selectExistingTable(table)}
+                  selectedLogicalName={current.dataverseSchemaName}
+                />
+                {matchStatus[current.accessTable] && (
+                  <p className="text-xs text-ink-500">{matchStatus[current.accessTable]}</p>
+                )}
+
                 {snapshotMissing && !capturingSnapshot && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      {EXISTING_TABLES_SNAPSHOT_MISSING}
-                      <div style={{ marginTop: 8, display: "flex", gap: 8 }}>
-                        <Button appearance="primary" onClick={captureSnapshot} disabled={!migrationJobId}>
-                          Capture schema snapshot
-                        </Button>
-                        <Button onClick={() => { void refreshSnapshot(); }} disabled={!migrationJobId}>
+                  <Alert
+                    intent="info"
+                    actions={
+                      <>
+                        <Button variant="secondary" size="sm" onClick={() => void refreshSnapshot()} disabled={!migrationJobId}>
                           Check again
                         </Button>
-                      </div>
-                    </MessageBarBody>
-                  </MessageBar>
+                        <Button variant="primary" size="sm" onClick={captureSnapshot} disabled={!migrationJobId}>
+                          Capture snapshot
+                        </Button>
+                      </>
+                    }
+                  >
+                    {EXISTING_TABLES_SNAPSHOT_MISSING}
+                  </Alert>
                 )}
                 {capturingSnapshot && (
-                  <MessageBar intent="info">
-                    <MessageBarBody>
-                      <Spinner size="tiny" /> Waiting for the desktop helper to capture and upload the Dataverse schema snapshot...
-                      <div style={{ marginTop: 8 }}>
-                        <Button onClick={() => { void refreshSnapshot(); }}>Check now</Button>
-                      </div>
-                    </MessageBarBody>
-                  </MessageBar>
+                  <HelperWaitingPanel
+                    title="Capturing Dataverse schema"
+                    description="The desktop helper is enumerating tables in your environment. The list will appear here automatically."
+                    helperUrl={snapshotLaunchUrl}
+                    onRelaunch={snapshotLaunchUrl ? () => setSnapshotModalOpen(true) : undefined}
+                  />
                 )}
-                {snapshotError && (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>Snapshot capture failed: {snapshotError}</MessageBarBody>
-                  </MessageBar>
-                )}
+                {snapshotError && <Alert intent="warning">Snapshot capture failed: {snapshotError}</Alert>}
                 {tableListError && !snapshotMissing && (
-                  <MessageBar intent="warning">
-                    <MessageBarBody>
-                      Existing tables could not be loaded ({tableListError}).
-                    </MessageBarBody>
-                  </MessageBar>
+                  <Alert intent="warning">Existing tables could not be loaded ({tableListError}).</Alert>
                 )}
               </div>
             )}
-          </div>
+          </Card>
+
           {current.targetMode === "existing" && !current.dataverseSchemaName ? (
-            <MessageBar intent="info">
-              <MessageBarBody>
-                Pick a Dataverse table above to start mapping columns.
-              </MessageBarBody>
-            </MessageBar>
+            <Alert intent="info">Pick a Dataverse table above to start mapping columns.</Alert>
           ) : (
-          <Table size="small">
-            <TableHeader>
-              <TableRow>
-                <TableHeaderCell>Migrate</TableHeaderCell>
-                <TableHeaderCell>Access column</TableHeaderCell>
-                <TableHeaderCell>Dataverse name</TableHeaderCell>
-                <TableHeaderCell>Type</TableHeaderCell>
-                <TableHeaderCell>Target</TableHeaderCell>
-                <TableHeaderCell>PK / Alt key</TableHeaderCell>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {current.fields.map((f, i) => (
-                <TableRow key={f.accessColumn}>
-                  <TableCell>
-                    <Checkbox
-                      checked={f.action === "Map"}
-                      onChange={(_e, d) => {
-                        const fields = [...current.fields];
-                        fields[i] = {
-                          ...f,
-                          action: d.checked ? "Map" : "Skip",
-                        };
-                        updateTable({ ...current, fields });
-                      }}
-                    />
-                  </TableCell>
-                  <TableCell>{f.accessColumn}</TableCell>
-                  <TableCell>
-                    {current.targetMode === "existing" && f.targetMode === "existing" ? (
-                      <Combobox
-                        placeholder="Pick an existing column"
-                        selectedOptions={f.dataverseSchemaName ? [f.dataverseSchemaName] : []}
-                        value={
-                          f.dataverseSchemaName
-                            ? `${f.dataverseDisplayName} (${f.dataverseSchemaName})`
-                            : ""
-                        }
-                        onOptionSelect={(_e, d) => {
-                          const col = existingTableColumns.find((c) => c.logicalName === d.optionValue);
-                          if (!col) return;
-                          const fields = [...current.fields];
-                          fields[i] = {
-                            ...f,
-                            targetMode: "existing",
-                            action: "Map",
-                            dataverseSchemaName: col.logicalName,
-                            dataverseDisplayName: col.displayName || col.schemaName || col.logicalName,
-                            dataverseType: toDataverseType(col.attributeType, f.dataverseType),
-                          };
-                          updateTable({ ...current, fields });
-                        }}
-                      >
-                        {existingTableColumns.map((col) => (
-                          <Option
-                            key={col.logicalName}
-                            value={col.logicalName}
-                            text={`${col.displayName} (${col.logicalName})`}
-                          >
-                            {col.displayName} ({col.logicalName})
-                          </Option>
-                        ))}
-                      </Combobox>
-                    ) : (
-                      <Input
-                        value={f.dataverseSchemaName}
-                        onChange={(_e, d) => {
-                          const fields = [...current.fields];
-                          fields[i] = { ...f, dataverseSchemaName: d.value };
-                          updateTable({ ...current, fields });
-                        }}
-                      />
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {DV_TYPES.includes(f.dataverseType) ? (
-                      <Dropdown
-                        value={f.dataverseType}
-                        selectedOptions={[f.dataverseType]}
-                        disabled={current.targetMode === "existing" && f.targetMode !== "new"}
-                        onOptionSelect={(_e, d) => {
-                          const fields = [...current.fields];
-                          fields[i] = {
-                            ...f,
-                            dataverseType:
-                              (d.optionValue as DataverseAttributeType) ??
-                              f.dataverseType,
-                          };
-                          updateTable({ ...current, fields });
-                        }}
-                      >
-                        {DV_TYPES.map((t) => (
-                          <Option key={t} value={t}>
-                            {t}
-                          </Option>
-                        ))}
-                      </Dropdown>
-                    ) : (
-                      <Caption1>
-                        {f.dataverseType}
-                        {f.dataverseType === "Lookup" ? " (from relationship)" : ""}
-                      </Caption1>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    {current.targetMode === "existing" ? (
-                      <Button
-                        size="small"
-                        appearance="subtle"
-                        onClick={() => {
-                          const fields = [...current.fields];
-                          if (f.targetMode === "new") {
-                            // Switch back to "bind to existing column".
-                            fields[i] = {
-                              ...f,
-                              targetMode: "existing",
-                              dataverseSchemaName: "",
-                              dataverseDisplayName: "",
-                            };
-                          } else {
-                            // Switch to "create new column on this existing table".
-                            const original = defaultPlan.tableMappings
-                              .find((t) => t.accessTable === current.accessTable)
-                              ?.fields.find((cf) => cf.accessColumn === f.accessColumn);
-                            fields[i] = {
-                              ...f,
-                              targetMode: "new",
-                              action: "Map",
-                              dataverseSchemaName: original?.dataverseSchemaName ?? f.dataverseSchemaName,
-                              dataverseDisplayName: original?.dataverseDisplayName ?? f.accessColumn,
-                              dataverseType: original?.dataverseType ?? f.dataverseType,
-                            };
+            <Card padding="none">
+              <Table>
+                <THead>
+                  <TR>
+                    <TH>Migrate</TH>
+                    <TH>Access column</TH>
+                    <TH>Dataverse name</TH>
+                    <TH>Type</TH>
+                    <TH>Target</TH>
+                    <TH>
+                      <span className="inline-flex items-center gap-1">
+                        Alt key
+                        <Tooltip
+                          content={
+                            <span>
+                              <strong>Alternate key.</strong> Marks this column as a Dataverse
+                              uniqueness constraint and enables idempotent re-runs (upsert by
+                              value instead of GUID). Best for natural business keys
+                              (e.g. order number, SKU). Only <em>String</em>, <em>Integer</em>,{" "}
+                              <em>DateTime</em>, and <em>Decimal</em> columns are eligible.
+                            </span>
                           }
-                          updateTable({ ...current, fields });
-                        }}
-                      >
-                        {f.targetMode === "new" ? "↺ Use existing column" : "+ Create new column"}
-                      </Button>
-                    ) : (
-                      <Caption1>New column</Caption1>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <Checkbox
-                      checked={f.isAlternateKey}
-                      label="Alt key"
-                      onChange={(_e, d) => {
-                        const fields = [...current.fields];
-                        fields[i] = {
-                          ...f,
-                          isAlternateKey: Boolean(d.checked),
-                        };
-                        updateTable({ ...current, fields });
-                      }}
-                    />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
+                        >
+                          <InfoIcon />
+                        </Tooltip>
+                      </span>
+                    </TH>
+                  </TR>
+                </THead>
+                <TBody>
+                  {current.fields.map((f, i) => (
+                    <TR key={f.accessColumn}>
+                      <TD>
+                        <Checkbox
+                          checked={f.action === "Map"}
+                          onChange={(e) => {
+                            const fields = [...current.fields];
+                            fields[i] = { ...f, action: e.target.checked ? "Map" : "Skip" };
+                            updateTable({ ...current, fields });
+                          }}
+                        />
+                      </TD>
+                      <TD>{f.accessColumn}</TD>
+                      <TD>
+                        {current.targetMode === "existing" && f.targetMode === "existing" ? (
+                          <Select
+                            value={f.dataverseSchemaName}
+                            onChange={(e) => {
+                              const col = existingTableColumns.find(
+                                (c) => c.logicalName === e.target.value,
+                              );
+                              if (!col) return;
+                              const fields = [...current.fields];
+                              fields[i] = {
+                                ...f,
+                                targetMode: "existing",
+                                action: "Map",
+                                dataverseSchemaName: col.logicalName,
+                                dataverseDisplayName:
+                                  col.displayName || col.schemaName || col.logicalName,
+                                dataverseType: toDataverseType(col.attributeType, f.dataverseType),
+                              };
+                              updateTable({ ...current, fields });
+                            }}
+                          >
+                            <option value="">— Pick column —</option>
+                            {existingTableColumns.map((col) => (
+                              <option key={col.logicalName} value={col.logicalName}>
+                                {col.displayName} ({col.logicalName})
+                              </option>
+                            ))}
+                          </Select>
+                        ) : (
+                          <Input
+                            value={f.dataverseSchemaName}
+                            onChange={(e) => {
+                              const fields = [...current.fields];
+                              fields[i] = { ...f, dataverseSchemaName: e.target.value };
+                              updateTable({ ...current, fields });
+                            }}
+                          />
+                        )}
+                      </TD>
+                      <TD>
+                        {DV_TYPES.includes(f.dataverseType) ? (
+                          <Select
+                            value={f.dataverseType}
+                            disabled={current.targetMode === "existing" && f.targetMode !== "new"}
+                            onChange={(e) => {
+                              const fields = [...current.fields];
+                              fields[i] = {
+                                ...f,
+                                dataverseType: e.target.value as DataverseAttributeType,
+                              };
+                              updateTable({ ...current, fields });
+                            }}
+                          >
+                            {DV_TYPES.map((t) => (
+                              <option key={t} value={t}>
+                                {DV_TYPE_LABELS[t] ?? t}
+                              </option>
+                            ))}
+                          </Select>
+                        ) : (
+                          <span className="text-xs text-ink-500">
+                            {DV_TYPE_LABELS[f.dataverseType] ?? f.dataverseType}
+                            {f.dataverseType === "Lookup" ? " (from relationship)" : ""}
+                          </span>
+                        )}
+                      </TD>
+                      <TD>
+                        {current.targetMode === "existing" ? (
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              const fields = [...current.fields];
+                              if (f.targetMode === "new") {
+                                fields[i] = {
+                                  ...f,
+                                  targetMode: "existing",
+                                  dataverseSchemaName: "",
+                                  dataverseDisplayName: "",
+                                };
+                              } else {
+                                const original = defaultPlan.tableMappings
+                                  .find((t) => t.accessTable === current.accessTable)
+                                  ?.fields.find((cf) => cf.accessColumn === f.accessColumn);
+                                fields[i] = {
+                                  ...f,
+                                  targetMode: "new",
+                                  action: "Map",
+                                  dataverseSchemaName:
+                                    original?.dataverseSchemaName ?? f.dataverseSchemaName,
+                                  dataverseDisplayName:
+                                    original?.dataverseDisplayName ?? f.accessColumn,
+                                  dataverseType: original?.dataverseType ?? f.dataverseType,
+                                };
+                              }
+                              updateTable({ ...current, fields });
+                            }}
+                          >
+                            {f.targetMode === "new" ? "↺ Use existing column" : "+ Create new column"}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-ink-500">New column</span>
+                        )}
+                      </TD>
+                      <TD>
+                        {(() => {
+                          const eligible = ALT_KEY_ELIGIBLE_TYPES.includes(f.dataverseType);
+                          const checkbox = (
+                            <Checkbox
+                              checked={eligible && f.isAlternateKey}
+                              disabled={!eligible}
+                              onChange={(e) => {
+                                const fields = [...current.fields];
+                                fields[i] = { ...f, isAlternateKey: e.target.checked };
+                                updateTable({ ...current, fields });
+                              }}
+                            />
+                          );
+                          return eligible ? (
+                            checkbox
+                          ) : (
+                            <Tooltip content="Alt keys only support String, Integer, DateTime, and Decimal columns.">
+                              <span className="opacity-50 cursor-not-allowed">{checkbox}</span>
+                            </Tooltip>
+                          );
+                        })()}
+                      </TD>
+                    </TR>
+                  ))}
+                </TBody>
+              </Table>
+            </Card>
           )}
         </>
       )}
-      <div className={styles.actions}>
-        <Button onClick={onBack}>Back</Button>
-        <Button
-          appearance="primary"
-          onClick={() => onPlanReady(plan)}
-          disabled={!isPlanValid}
-        >
+
+      <div className="flex items-center justify-between pt-2">
+        <Button variant="secondary" onClick={onBack}>
+          Back
+        </Button>
+        <Button variant="primary" onClick={() => onPlanReady(plan)} disabled={!isPlanValid}>
           Save plan & continue
         </Button>
       </div>
+
+      <ConfirmModal
+        open={!!pendingStandardTable}
+        onClose={() => {
+          if (current && pendingStandardTable) {
+            setMatchStatus((prev) => ({
+              ...prev,
+              [current.accessTable]: `Cancelled mapping to ${pendingStandardTable.displayName}.`,
+            }));
+          }
+          setPendingStandardTable(null);
+        }}
+        onConfirm={async () => {
+          const table = pendingStandardTable;
+          setPendingStandardTable(null);
+          if (table) await applyExistingTable(table);
+        }}
+        title="Use a standard Dataverse table?"
+        description={
+          pendingStandardTable
+            ? `'${pendingStandardTable.displayName}' (${pendingStandardTable.logicalName}) is a standard Dataverse table.`
+            : undefined
+        }
+        confirmLabel="Yes, map into it"
+      >
+        <p className="text-sm text-ink-700 mb-2">
+          Rows from{" "}
+          <strong>{current?.accessTable}</strong> will be loaded into it, and any Access columns
+          that don't already exist will be added as <strong>new custom columns</strong> on the
+          standard table.
+        </p>
+        <p className="text-sm text-ink-700">
+          This is a great way to consolidate multiple Access databases into one shared table — just
+          make sure that's what you intend.
+        </p>
+      </ConfirmModal>
+
+      <HelperLaunchModal
+        open={snapshotModalOpen}
+        mode="snapshot"
+        helperUrl={snapshotLaunchUrl ?? ""}
+        onClose={() => setSnapshotModalOpen(false)}
+        onLaunched={() => {
+          setCapturingSnapshot(true);
+          setSnapshotMissing(false);
+          setMatchStatus((prev) => ({ ...prev }));
+          startSnapshotPolling();
+        }}
+      />
     </div>
   );
 }
+
+function ModeTile({
+  active,
+  onClick,
+  title,
+  description,
+}: {
+  active: boolean;
+  onClick: () => void;
+  title: string;
+  description: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cx(
+        "text-left rounded-xl border-2 p-4 transition focus-ring",
+        active
+          ? "border-brand-500 bg-brand-50"
+          : "border-ink-200 bg-white hover:border-ink-300 hover:bg-ink-50",
+      )}
+    >
+      <div className="flex items-center gap-2 mb-1">
+        <div
+          className={cx(
+            "h-4 w-4 rounded-full border-2 flex items-center justify-center transition",
+            active ? "border-brand-500 bg-brand-500" : "border-ink-300",
+          )}
+        >
+          {active && <div className="h-1.5 w-1.5 rounded-full bg-white" />}
+        </div>
+        <div className="text-sm font-semibold text-ink-900">{title}</div>
+      </div>
+      <div className="text-xs text-ink-500 ml-6">{description}</div>
+    </button>
+  );
+}
+
+interface ExistingTablePickerProps {
+  tableQuery: string;
+  setTableQuery: (v: string) => void;
+  loadingTables: boolean;
+  tables: ExistingDataverseTable[];
+  onOpen: () => void;
+  onSelect: (table: ExistingDataverseTable) => void;
+  selectedLogicalName: string;
+}
+
+function ExistingTablePicker({
+  tableQuery,
+  setTableQuery,
+  loadingTables,
+  tables,
+  onOpen,
+  onSelect,
+  selectedLogicalName,
+}: ExistingTablePickerProps) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    function onClick(e: MouseEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onClick);
+    return () => document.removeEventListener("mousedown", onClick);
+  }, []);
+
+  const filtered = filterTables(tables, tableQuery);
+
+  return (
+    <div className="relative" ref={ref}>
+      <Input
+        label="Dataverse table"
+        hint={selectedLogicalName ? "Type to filter or pick a different table." : "Type to filter by display or logical name."}
+        placeholder="Select an existing Dataverse table"
+        value={tableQuery}
+        onChange={(e) => {
+          setTableQuery(e.target.value);
+          if (!open) {
+            setOpen(true);
+            onOpen();
+          }
+        }}
+        onFocus={() => {
+          setOpen(true);
+          onOpen();
+        }}
+        error={selectedLogicalName ? undefined : "Pick a Dataverse table to continue."}
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full max-h-72 overflow-y-auto bg-white border border-ink-200 rounded-xl shadow-pop">
+          {loadingTables && (
+            <div className="px-3 py-2 text-sm text-ink-500 flex items-center gap-2">
+              <Spinner size={12} /> Loading tables…
+            </div>
+          )}
+          {!loadingTables && filtered.length === 0 && (
+            <div className="px-3 py-2 text-sm text-ink-500">No matching tables.</div>
+          )}
+          {!loadingTables &&
+            filtered.map((t) => (
+              <button
+                key={t.logicalName}
+                onClick={() => {
+                  setTableQuery(`${t.displayName} (${t.logicalName})`);
+                  setOpen(false);
+                  onSelect(t);
+                }}
+                className="w-full text-left px-3 py-2 text-sm hover:bg-brand-50 transition flex items-center justify-between gap-3"
+              >
+                <span>
+                  <span className="font-medium text-ink-900">{t.displayName}</span>{" "}
+                  <span className="text-ink-500 font-mono text-xs">({t.logicalName})</span>
+                </span>
+                {!t.isCustomEntity && (
+                  <span className="shrink-0 text-[10px] uppercase tracking-wide text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded">
+                    Standard
+                  </span>
+                )}
+              </button>
+            ))}
+        </div>
+      )}
+    </div>
+  );
+}
+

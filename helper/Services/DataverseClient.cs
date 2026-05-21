@@ -234,21 +234,62 @@ public sealed class DataverseClient : IDisposable
         string? solutionUniqueName,
         CancellationToken ct)
     {
-        using var req = new HttpRequestMessage(method, path);
-        if (!string.IsNullOrEmpty(jsonBody))
+        for (var attempt = 0; ; attempt++)
         {
-            req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            using var req = new HttpRequestMessage(method, path);
+            if (!string.IsNullOrEmpty(jsonBody))
+            {
+                req.Content = new StringContent(jsonBody, Encoding.UTF8, "application/json");
+            }
+            if (!string.IsNullOrWhiteSpace(solutionUniqueName))
+            {
+                req.Headers.TryAddWithoutValidation("MSCRM.SolutionUniqueName", solutionUniqueName);
+            }
+            var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) return resp;
+
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            if (ShouldRetryMetadata(resp, body, attempt))
+            {
+                var waitMs = ComputeMetadataRetryDelayMs(resp, attempt);
+                resp.Dispose();
+                await Task.Delay(waitMs, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            await EnsureSuccessAsync(resp, body).ConfigureAwait(false);
+            return resp;
         }
-        if (!string.IsNullOrWhiteSpace(solutionUniqueName))
+    }
+
+    private static bool ShouldRetryMetadata(HttpResponseMessage resp, string body, int attempt)
+    {
+        if (attempt >= 8) return false;
+        if ((int)resp.StatusCode == 429) return true;
+        return body.Contains("0x80071151", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("Cannot start the requested operation", StringComparison.OrdinalIgnoreCase)
+            || body.Contains("another solution", StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static int ComputeMetadataRetryDelayMs(HttpResponseMessage resp, int attempt)
+    {
+        if (resp.Headers.RetryAfter is { } header)
         {
-            req.Headers.TryAddWithoutValidation("MSCRM.SolutionUniqueName", solutionUniqueName);
+            if (header.Delta is { } delta) return Math.Clamp((int)delta.TotalMilliseconds, 1_000, 60_000);
+            if (header.Date is { } date)
+            {
+                var wait = (int)Math.Max(0, (date.UtcDateTime - DateTime.UtcNow).TotalMilliseconds);
+                return Math.Clamp(wait, 1_000, 60_000);
+            }
         }
-        var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
-        if (!resp.IsSuccessStatusCode)
+        return attempt switch
         {
-            await EnsureSuccessAsync(resp, ct).ConfigureAwait(false);
-        }
-        return resp;
+            0 => 10_000,
+            1 => 20_000,
+            2 => 30_000,
+            3 => 45_000,
+            _ => 60_000,
+        };
     }
 
     public async Task<JsonDocument> GetJsonAsync(string path, CancellationToken ct)
@@ -384,6 +425,12 @@ public sealed class DataverseClient : IDisposable
     {
         if (resp.IsSuccessStatusCode) return;
         var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+        await EnsureSuccessAsync(resp, text).ConfigureAwait(false);
+    }
+
+    private static Task EnsureSuccessAsync(HttpResponseMessage resp, string text)
+    {
+        if (resp.IsSuccessStatusCode) return Task.CompletedTask;
         throw new HttpRequestException(
             $"Dataverse {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(text, 800)}");
     }

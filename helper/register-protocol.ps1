@@ -2,7 +2,7 @@
 # HKCU = no admin required. Run AFTER you've built or published the helper.
 #
 # Usage:
-#   .\register-protocol.ps1                                    # uses .\bin\Release\net10.0-windows\AccessToPowerHelper.exe
+#   .\register-protocol.ps1                                    # uses .\bin\Release\net10.0-windows\win-x64\publish\AccessToPowerHelper.exe
 #   .\register-protocol.ps1 -ExePath C:\full\path\to\helper.exe
 #   .\register-protocol.ps1 -Unregister
 
@@ -26,7 +26,7 @@ if ($Unregister) {
 }
 
 if (-not $ExePath) {
-    $ExePath = Join-Path $PSScriptRoot "bin\Release\net10.0-windows\win-x64\AccessToPowerHelper.exe"
+    $ExePath = Join-Path $PSScriptRoot "bin\Release\net10.0-windows\win-x64\publish\AccessToPowerHelper.exe"
 }
 if (-not (Test-Path $ExePath)) {
     throw "Helper executable not found at: $ExePath. Build the helper first with 'dotnet publish -c Release'."

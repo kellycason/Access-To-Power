@@ -88,9 +88,31 @@ export function buildDefaultPlan(
     const tableSlug = sanitizeSchemaSegment(singularName, prefix.length, usedTableSchemas, "table");
     usedTableSchemas.add(tableSlug);
     const schema = `${prefix}_${tableSlug}`;
+    // Primary name column: must be a non-PK, non-FK, **text-like** column.
+    // Dataverse's primary-name attribute is always a String, so picking an
+    // Integer/Long/Date column causes every row insert to fail with
+    // "Cannot convert Int32 to String". Picking the PK collides with the
+    // auto-generated <entity>id. Picking an FK blocks Pass 3 from creating
+    // the corresponding lookup ("already exists"). When nothing qualifies
+    // (e.g. junction tables with only ID + FKs + integer columns), leave
+    // primaryName undefined so the helper synthesizes a `<prefix>_name`
+    // attribute instead.
+    const isFk = (c: typeof t.columns[number]) =>
+      foreignKeyColumns.has(`${t.name}\u0000${c.name}`);
+    // Exclude value-list columns (those become Choice attributes — picking
+    // one as the primary name would force SchemaCreator to fall back to the
+    // synthetic <prefix>_name anyway, and emit a warning every run).
+    const hasValueList = (c: typeof t.columns[number]) =>
+      Array.isArray(c.valueList) && c.valueList.length > 0;
     const primaryName =
-      t.columns.find((c) => c.dataType === "Text" && !c.isAutoNumber)?.name ??
-      t.columns[0]?.name;
+      t.columns.find((c) => !c.isPrimaryKey && !isFk(c) && c.dataType === "Text" && !c.isAutoNumber && !hasValueList(c))?.name ??
+      t.columns.find((c) => !c.isPrimaryKey && !isFk(c) && c.dataType === "Memo" && !hasValueList(c))?.name;
+
+    // Reserved column slug that Dataverse auto-generates as the entity's
+    // primary key (logical name = `${schema}id`). Any user column that would
+    // map to the same logical name must be renamed to avoid the
+    // "Column name 'X' specified more than once" SQL error.
+    const reservedPkSlug = `${tableSlug}id`;
 
     const usedColumnSchemas = new Set<string>();
     return {
@@ -105,7 +127,14 @@ export function buildDefaultPlan(
         const supported = isSupported(c.dataType);
         const isForeignKey = foreignKeyColumns.has(`${t.name}\u0000${c.name}`);
         const dvType = isForeignKey ? "Lookup" : mapType(c.dataType, c);
-        const colSlug = sanitizeSchemaSegment(c.name, prefix.length, usedColumnSchemas, "column");
+        let colSlug = sanitizeSchemaSegment(c.name, prefix.length, usedColumnSchemas, "column");
+        if (colSlug === reservedPkSlug) {
+          // Collides with auto-generated PK (e.g. CategoryID -> acp_categoryid
+          // when entity is acp_category). Suffix with `_src` so we can still
+          // capture the original Access value as a regular column.
+          const alt = sanitizeSchemaSegment(`${c.name}_src`, prefix.length, usedColumnSchemas, "column");
+          colSlug = alt === reservedPkSlug ? `${alt}_v` : alt;
+        }
         usedColumnSchemas.add(colSlug);
         // Promote Single/Double to Decimal when scan-phase saw more decimal
         // digits than Float's 5-digit cap (guide Part 2).
@@ -113,6 +142,14 @@ export function buildDefaultPlan(
           dvType === "Decimal" && (c.dataType === "Single" || c.dataType === "Double")
             ? Math.min(c.detectedMaxDecimals ?? 5, 10)
             : c.precision;
+        // Materialize Choice option values. Dataverse picklist values must be
+        // integers; we assign them starting at 100000000 (the conventional
+        // custom-option-set base) and increment by 1 in source order so the
+        // labels appear in the same order as the Access value list.
+        const choiceOptions =
+          dvType === "Choice" && c.valueList && c.valueList.length > 0
+            ? c.valueList.map((label, i) => ({ value: 100000000 + i, label }))
+            : undefined;
         return {
           accessTable: t.name,
           accessColumn: c.name,
@@ -125,6 +162,7 @@ export function buildDefaultPlan(
           precision,
           isAlternateKey: c.isPrimaryKey,
           isRequired: c.isRequired,
+          choiceOptions,
         };
       }),
     };
@@ -149,10 +187,18 @@ function collectForeignKeyColumns(manifest: AccessSchemaManifest): Set<string> {
 }
 
 function isSupported(t: string): boolean {
-  return !["Binary", "OleObject", "Attachment", "Unknown"].includes(t);
+  return !["Binary", "OleObject", "Attachment", "Multivalue", "Unknown"].includes(t);
 }
 
 function mapType(t: string, col?: AccessColumn): TableMapping["fields"][number]["dataverseType"] {
+  // A value list discovered by DAO trumps the scalar type — the column is
+  // semantically a Choice and Dataverse models it as a PicklistAttribute.
+  // Skips Memo because there's no real-world Access pattern of "memo with
+  // value list" that survives a sane mapping, and we want to keep Choice
+  // values short-string-only.
+  if (col?.valueList && col.valueList.length > 0 && t !== "Memo" && t !== "Boolean") {
+    return "Choice";
+  }
   switch (t) {
     case "Text":
     case "Hyperlink":
