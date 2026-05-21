@@ -51,3 +51,5 @@ scripts/_*.txt
 
 # Helper installer build output
 /artifacts/
+
+artifacts/
