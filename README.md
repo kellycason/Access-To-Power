@@ -7,6 +7,18 @@ a remediation report for anything that can't move automatically.
 > Migrates: **tables, columns, relationships, data**
 > Does **NOT** migrate: forms, reports, macros, VBA, queries, attachments, OLE objects
 
+## 🚀 Install / get started
+
+**New here? Read this first:**
+
+| What | Where |
+| --- | --- |
+| 📘 **Step-by-step install guide** (10-year-old friendly) | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
+| 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
+| 🧩 **Power Platform solution file** | ask your admin (built from this repo) |
+
+You need: a Windows PC, a Power Apps Premium license, and a Dataverse environment where you're a System Customizer.
+
 ![Architecture diagram](docs/architecture-diagram.png)
 
 ## Architecture
