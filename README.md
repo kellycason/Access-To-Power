@@ -13,7 +13,7 @@ a remediation report for anything that can't move automatically.
 
 | What | Where |
 | --- | --- |
-| 📘 **Step-by-step install guide** (10-year-old friendly) | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
+| 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
 | 🧩 **Power Platform solution file** | ask your admin (built from this repo) |
 
