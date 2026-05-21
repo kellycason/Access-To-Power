@@ -29,7 +29,9 @@ Tick these off first. If anything's missing, grab it before going further.
       grab the **`AccessDatabaseEngine_X64.exe`** version.
 - [ ] The **Access to Power solution file** (`AccessToPower_x_x_x_managed.zip`) — your
       admin or whoever sent you here should have given you this file.
-- [ ] The **helper installer zip** (`AccessToPowerHelper-x.x.x-win-x64.zip`) — same source.
+- [ ] The **helper installer zip** (`AccessToPowerHelper-0.1.0-win-x64.zip`). Download the
+      latest one from the project's GitHub Releases page:
+      👉 **https://github.com/kellycason/Access-To-Power/releases/latest**
 
 > ❓ **What's a Dataverse environment?** Think of it like a database in the cloud where
 > Power Apps stores its stuff. Your company probably already has one (or several). You
@@ -104,8 +106,9 @@ it opens your Access file and uploads what's inside.
 
 ## Step 2 — Unzip the helper
 
-1. Find the file **`AccessToPowerHelper-x.x.x-win-x64.zip`** (the one your admin sent
-   you).
+1. Download **`AccessToPowerHelper-0.1.0-win-x64.zip`** from
+   **https://github.com/kellycason/Access-To-Power/releases/latest**
+   *(or use the copy your admin sent you).*
 2. **Right-click** the zip file.
 3. Choose **Extract All...** in the menu that pops up.
 4. Click **Extract**. Windows makes a new folder next to the zip with the same name.
