@@ -339,6 +339,33 @@ public sealed class AccessReader : IDisposable
                         });
                     }
                 }
+                else if (col.DataType is "Binary" or "OleObject")
+                {
+                    // Sample a few rows of bytes to figure out whether the
+                    // column holds images (→ default to Dataverse Image),
+                    // PDFs/docs (→ default to Dataverse File), or arbitrary
+                    // bytes (→ Dataverse File). We also detect Access OLE
+                    // Package wrappers so the data loader can strip them
+                    // before upload.
+                    col.BinaryHint = DetectBinary(table.Name, col.Name, sampleSize: 5);
+                    if (col.BinaryHint is not null)
+                    {
+                        col.UnsupportedReason = col.DataType;
+                        col.Issues ??= new();
+                        col.Issues.Add(new ManifestIssue
+                        {
+                            Severity = "Info",
+                            Category = "UnsupportedType",
+                            Message =
+                                $"Column '{col.Name}' on '{table.Name}' holds {col.BinaryHint.DetectedKind} data " +
+                                (col.BinaryHint.SampleMime is { } m ? $"({m}) " : "") +
+                                $"— will be migrated to a Dataverse " +
+                                $"{(col.BinaryHint.DetectedKind == "image" ? "Image" : "File")} column.",
+                            Table = table.Name,
+                            Column = col.Name,
+                        });
+                    }
+                }
             }
             catch (OleDbException ex)
             {
@@ -386,6 +413,180 @@ public sealed class AccessReader : IDisposable
         if (dot < 0) return 0;
         var frac = str.AsSpan(dot + 1).TrimEnd('0');
         return frac.Length;
+    }
+
+    /// <summary>
+    /// Samples a binary column (Binary or OleObject) and produces a
+    /// BinaryHint describing the most likely content (image / pdf / document
+    /// / binary) plus whether the bytes appear wrapped in an Access OLE
+    /// Package envelope. Returns null when sampling fails outright.
+    /// </summary>
+    private BinaryHint? DetectBinary(string tableName, string columnName, int sampleSize)
+    {
+        var quotedT = QuoteIdentifier(tableName);
+        var quotedC = QuoteIdentifier(columnName);
+        var sql = $"SELECT TOP {sampleSize} {quotedC} FROM {quotedT} WHERE {quotedC} IS NOT NULL";
+
+        long maxBytes = 0;
+        int sampled = 0;
+        string? bestMime = null;
+        string bestKind = "binary";
+        bool sawWrapper = false;
+        var kindsSeen = new HashSet<string>(StringComparer.Ordinal);
+
+        try
+        {
+            using var cmd = new OleDbCommand(sql, _conn);
+            cmd.CommandTimeout = 0;
+            using var reader = cmd.ExecuteReader(CommandBehavior.SequentialAccess);
+            var buffer = new byte[8192];
+
+            while (reader.Read())
+            {
+                if (reader.IsDBNull(0)) continue;
+                // Read up to first 4 KB; that's plenty for magic-byte sniffing.
+                long total;
+                byte[] head;
+                try
+                {
+                    var len = reader.GetBytes(0, 0L, buffer, 0, buffer.Length);
+                    head = new byte[len];
+                    Array.Copy(buffer, head, len);
+                    // Find true total size — many providers report length when
+                    // we ask for offset > available, but cheaper to just keep
+                    // a min using head length here.
+                    total = len;
+                }
+                catch (InvalidCastException)
+                {
+                    // OleObject (IDispatch) columns sometimes refuse GetBytes;
+                    // fall back to GetValue and hope it materializes.
+                    var v = reader.GetValue(0);
+                    if (v is byte[] raw)
+                    {
+                        head = raw.Length > 4096 ? raw[..4096] : raw;
+                        total = raw.Length;
+                    }
+                    else
+                    {
+                        continue;
+                    }
+                }
+                catch (OleDbException)
+                {
+                    continue;
+                }
+                catch (System.Runtime.InteropServices.COMException)
+                {
+                    continue;
+                }
+
+                sampled++;
+                if (total > maxBytes) maxBytes = total;
+                var (kind, mime, wrapper) = BinarySniffer.Sniff(head);
+                if (wrapper) sawWrapper = true;
+                kindsSeen.Add(kind);
+                // Prefer the most specific detection across samples
+                // (image > pdf > document > binary).
+                if (Rank(kind) > Rank(bestKind))
+                {
+                    bestKind = kind;
+                    bestMime = mime;
+                }
+            }
+        }
+        catch (OleDbException)
+        {
+            return null;
+        }
+
+        if (sampled == 0) return null;
+
+        // Mixed content guardrail: Dataverse Image columns validate every
+        // uploaded blob and reject non-images outright. If the sample
+        // included an image AND anything else (PDF, document, unidentified
+        // bytes), downgrade to "binary" so the planner routes the column
+        // to File (which accepts any bytes) rather than Image.
+        if (bestKind == "image" && kindsSeen.Count > 1)
+        {
+            bestKind = "binary";
+            bestMime = null;
+        }
+
+        return new BinaryHint
+        {
+            DetectedKind = bestKind,
+            SampleMime = bestMime,
+            HasOleWrapper = sawWrapper,
+            MaxBytes = maxBytes,
+            SampleSize = sampled,
+        };
+
+        static int Rank(string k) => k switch
+        {
+            "image" => 3,
+            "pdf" => 2,
+            "document" => 1,
+            _ => 0,
+        };
+    }
+
+    /// <summary>
+    /// Reads a single binary cell by primary-key lookup. Used by DataLoader
+    /// during the per-row binary upload pass. Returns null when the row
+    /// matches no record, the cell is null, or the column can't be read via
+    /// OLE DB (e.g., Attachment chapter rowset — DAO is needed for those).
+    /// </summary>
+    public byte[]? ReadBinaryCell(string tableName, string keyColumn, object keyValue, string binaryColumn)
+    {
+        var quotedT = QuoteIdentifier(tableName);
+        var quotedK = QuoteIdentifier(keyColumn);
+        var quotedB = QuoteIdentifier(binaryColumn);
+        // Parameter binding through OleDb honours `?` placeholders in order.
+        using var cmd = new OleDbCommand(
+            $"SELECT {quotedB} FROM {quotedT} WHERE {quotedK} = ?", _conn);
+        cmd.CommandTimeout = 0;
+        // ACE OLEDB is strict about parameter type matching. AddWithValue on
+        // a CLR `long` infers BigInt, which fails to bind to an Access Long
+        // Integer (Int32) column with "could not be converted for reasons
+        // other than sign mismatch or data overflow". Build the parameter
+        // explicitly from the value's CLR type and downcast Int64 → Int32
+        // when it fits (Access has no 64-bit PK type).
+        AddTypedKeyParameter(cmd, keyValue);
+        try
+        {
+            using var reader = cmd.ExecuteReader(CommandBehavior.SequentialAccess);
+            if (!reader.Read() || reader.IsDBNull(0)) return null;
+            try
+            {
+                // Stream into a MemoryStream — bytes can be large (multi-MB).
+                using var ms = new MemoryStream();
+                var buffer = new byte[64 * 1024];
+                long offset = 0;
+                while (true)
+                {
+                    var n = reader.GetBytes(0, offset, buffer, 0, buffer.Length);
+                    if (n <= 0) break;
+                    ms.Write(buffer, 0, (int)n);
+                    if (n < buffer.Length) break;
+                    offset += n;
+                }
+                return ms.Length == 0 ? null : ms.ToArray();
+            }
+            catch (InvalidCastException)
+            {
+                var v = reader.GetValue(0);
+                return v as byte[];
+            }
+        }
+        catch (OleDbException)
+        {
+            return null;
+        }
+        catch (System.Runtime.InteropServices.COMException)
+        {
+            return null;
+        }
     }
 
     /// <summary>
@@ -487,16 +688,71 @@ public sealed class AccessReader : IDisposable
         return $"[{name}]";
     }
 
+    private static void AddTypedKeyParameter(OleDbCommand cmd, object keyValue)
+    {
+        OleDbParameter p;
+        switch (keyValue)
+        {
+            case null:
+                p = new OleDbParameter("@k", OleDbType.Variant) { Value = DBNull.Value };
+                break;
+            case Guid g:
+                p = new OleDbParameter("@k", OleDbType.Guid) { Value = g };
+                break;
+            case bool b:
+                p = new OleDbParameter("@k", OleDbType.Boolean) { Value = b };
+                break;
+            case byte by:
+                p = new OleDbParameter("@k", OleDbType.UnsignedTinyInt) { Value = by };
+                break;
+            case short s:
+                p = new OleDbParameter("@k", OleDbType.SmallInt) { Value = s };
+                break;
+            case int i:
+                p = new OleDbParameter("@k", OleDbType.Integer) { Value = i };
+                break;
+            case long l:
+                // Access has no 64-bit PK type. Downcast to Int32 when it fits
+                // (the common case for AutoNumber PKs).
+                p = (l >= int.MinValue && l <= int.MaxValue)
+                    ? new OleDbParameter("@k", OleDbType.Integer) { Value = (int)l }
+                    : new OleDbParameter("@k", OleDbType.BigInt) { Value = l };
+                break;
+            case double d:
+                p = new OleDbParameter("@k", OleDbType.Double) { Value = d };
+                break;
+            case float f:
+                p = new OleDbParameter("@k", OleDbType.Single) { Value = f };
+                break;
+            case decimal m:
+                p = new OleDbParameter("@k", OleDbType.Decimal) { Value = m };
+                break;
+            case DateTime dt:
+                p = new OleDbParameter("@k", OleDbType.Date) { Value = dt };
+                break;
+            case string str:
+                p = new OleDbParameter("@k", OleDbType.VarWChar, Math.Max(str.Length, 1)) { Value = str };
+                break;
+            default:
+                p = new OleDbParameter("@k", OleDbType.VarWChar)
+                {
+                    Value = Convert.ToString(keyValue, System.Globalization.CultureInfo.InvariantCulture) ?? (object)DBNull.Value
+                };
+                break;
+        }
+        cmd.Parameters.Add(p);
+    }
+
     private static string MapOleDbType(OleDbType t, int? maxLen) => t switch
     {
-        // Access's TEXT type maps to (Var)WChar/(Var)Char in OLE DB and is
-        // always capped at 255 chars in Access itself, so it's always a
-        // single-line String in Dataverse. Long text uses LongVar*Char which
-        // OLE DB reports separately — that's the genuine Memo case.
-        // ACE OLE DB sometimes reports MaxLength=0/null for legitimately-
-        // sized TEXT columns; treating those as Memo gave us double-height
-        // textareas on form fields like LastName. Force Text here.
-        OleDbType.WChar or OleDbType.VarWChar or OleDbType.Char or OleDbType.VarChar => "Text",
+        // Access TEXT and MEMO both surface as (Var)WChar in ACE schema
+        // rowsets. The discriminator is CHARACTER_MAXIMUM_LENGTH:
+        //   • 1..255  → real Short Text (TEXT(n))
+        //   • 0 / null → Long Text (MEMO), unlimited length
+        // (LongVar*Char comes back from some non-ACE providers; honour it
+        // too.) DaoEnricher overrides via dbMemo when DAO is available.
+        OleDbType.WChar or OleDbType.VarWChar or OleDbType.Char or OleDbType.VarChar
+            => (maxLen is null or 0) ? "Memo" : "Text",
         OleDbType.LongVarWChar or OleDbType.LongVarChar => "Memo",
         OleDbType.UnsignedTinyInt => "Byte",
         OleDbType.SmallInt or OleDbType.UnsignedSmallInt => "Integer",
@@ -520,5 +776,116 @@ public sealed class AccessReader : IDisposable
         _conn.Dispose();
         _disposed = true;
         GC.SuppressFinalize(this);
+    }
+}
+
+/// <summary>
+/// Magic-byte sniffer for binary blob bytes read out of Access columns.
+/// Recognises common image / PDF formats and the legacy Access OLE Package
+/// wrapper. Used both at scan time (to default Binary→File vs Binary→Image)
+/// and at migrate time (to strip wrappers before uploading bytes to
+/// Dataverse File / Image columns).
+/// </summary>
+public static class BinarySniffer
+{
+    /// <summary>
+    /// Returns the detected <c>kind</c> ("image"/"pdf"/"document"/"binary"),
+    /// a best-guess MIME string, and a flag indicating that the bytes start
+    /// with an Access OLE Package envelope (caller should call
+    /// <see cref="StripWrapper"/> before upload).
+    /// </summary>
+    public static (string Kind, string? Mime, bool HasOleWrapper) Sniff(byte[] head)
+    {
+        if (head is null || head.Length == 0) return ("binary", null, false);
+
+        // First check for unwrapped magic at offset 0.
+        var direct = SniffAt(head, 0);
+        if (direct.HasValue) return (direct.Value.Kind, direct.Value.Mime, false);
+
+        // Access OLE Object cells often start with an OLE Package or OleStream
+        // envelope: an ASCII header (e.g. "Bitmap Image", "Microsoft Word
+        // Document", "Package") followed by some metadata and then the real
+        // bytes. The exact layout varies; the most robust approach is to scan
+        // the first ~1 KB for known magic bytes and treat that as the start
+        // of the real payload.
+        for (var i = 1; i < Math.Min(head.Length - 4, 1024); i++)
+        {
+            var hit = SniffAt(head, i);
+            if (hit.HasValue) return (hit.Value.Kind, hit.Value.Mime, true);
+        }
+
+        // OLE Compound Document (D0 CF 11 E0 ...) — legacy Word/Excel/Visio
+        // embedded objects. Treat as a generic document file.
+        if (head.Length >= 8 &&
+            head[0] == 0xD0 && head[1] == 0xCF && head[2] == 0x11 && head[3] == 0xE0 &&
+            head[4] == 0xA1 && head[5] == 0xB1 && head[6] == 0x1A && head[7] == 0xE1)
+        {
+            return ("document", "application/x-ole-storage", false);
+        }
+
+        return ("binary", "application/octet-stream", false);
+    }
+
+    /// <summary>
+    /// If <see cref="Sniff"/> reported <c>HasOleWrapper=true</c>, strips the
+    /// envelope and returns just the embedded payload. Otherwise returns the
+    /// input array unchanged. Safe to call on any input — if nothing
+    /// recognisable is found, returns the original bytes.
+    /// </summary>
+    public static byte[] StripWrapper(byte[] bytes)
+    {
+        if (bytes is null || bytes.Length < 4) return bytes ?? Array.Empty<byte>();
+
+        // Quick out: already starts with known magic.
+        if (SniffAt(bytes, 0).HasValue) return bytes;
+
+        var scan = Math.Min(bytes.Length - 4, 4096);
+        for (var i = 1; i < scan; i++)
+        {
+            if (SniffAt(bytes, i).HasValue)
+            {
+                var stripped = new byte[bytes.Length - i];
+                Array.Copy(bytes, i, stripped, 0, stripped.Length);
+                return stripped;
+            }
+        }
+        return bytes;
+    }
+
+    private static (string Kind, string Mime)? SniffAt(byte[] b, int o)
+    {
+        // JPEG: FF D8 FF
+        if (Has(b, o, 0xFF, 0xD8, 0xFF)) return ("image", "image/jpeg");
+        // PNG: 89 50 4E 47 0D 0A 1A 0A
+        if (Has(b, o, 0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+            return ("image", "image/png");
+        // GIF: GIF87a / GIF89a
+        if (Has(b, o, 0x47, 0x49, 0x46, 0x38) && o + 5 < b.Length &&
+            (b[o + 4] == 0x37 || b[o + 4] == 0x39) && b[o + 5] == 0x61)
+            return ("image", "image/gif");
+        // WebP: RIFF .... WEBP
+        if (Has(b, o, 0x52, 0x49, 0x46, 0x46) && o + 11 < b.Length &&
+            b[o + 8] == 0x57 && b[o + 9] == 0x45 && b[o + 10] == 0x42 && b[o + 11] == 0x50)
+            return ("image", "image/webp");
+        // PDF: %PDF
+        if (Has(b, o, 0x25, 0x50, 0x44, 0x46)) return ("pdf", "application/pdf");
+        // ZIP / OOXML container (docx, xlsx) — PK\x03\x04
+        if (Has(b, o, 0x50, 0x4B, 0x03, 0x04)) return ("document", "application/zip");
+        // BMP only at offset 0 (2-byte magic is too lossy for offset scan).
+        if (o == 0 && b.Length >= 6 && b[0] == 0x42 && b[1] == 0x4D)
+        {
+            var declared = BitConverter.ToInt32(b, 2);
+            if (declared > 0 && declared <= b.Length + 1_000_000)
+                return ("image", "image/bmp");
+        }
+        return null;
+    }
+
+    private static bool Has(byte[] b, int o, params byte[] sig)
+    {
+        if (o + sig.Length > b.Length) return false;
+        for (var i = 0; i < sig.Length; i++)
+            if (b[o + i] != sig[i]) return false;
+        return true;
     }
 }

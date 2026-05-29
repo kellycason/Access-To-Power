@@ -74,12 +74,35 @@ export interface AccessColumn {
    * via the baseline migration (multi-value lookup, attachment, OLE blob).
    * The column's row values are emitted as null in NDJSON and the migration
    * report surfaces the column under "dropped" so the user sees it.
+   *
+   * NOTE: "Binary"/"OleObject"/"Attachment" no longer mean "dropped" —
+   * the plan builder routes them to Dataverse File / Image columns or
+   * note annotations (see binaryHint + FieldMapping.dataverseType).
+   * The reason string is retained for UI labelling and source-of-truth
+   * about the original Access type.
    */
   unsupportedReason?:
     | "Multivalue"
     | "Attachment"
     | "OleObject"
     | "Binary";
+  /**
+   * Scan-phase evidence about what binary bytes actually look like. Used by
+   * the plan builder to default Binary/OleObject columns to either a File
+   * column (generic blob) or an Image column (when image magic bytes were
+   * detected). Absent when the column has no rows or no bytes survived
+   * sampling. `hasOleWrapper` flags Access OLE Package envelopes — the data
+   * loader strips that prefix before upload so consumers get a clean file.
+   */
+  binaryHint?: {
+    detectedKind: "image" | "pdf" | "document" | "binary";
+    sampleMime?: string;
+    hasOleWrapper?: boolean;
+    /** Largest byte count observed across sampled rows. */
+    maxBytes?: number;
+    /** Number of rows the helper sampled to produce this hint. */
+    sampleSize?: number;
+  };
   /** Issues the helper found while reading this column. */
   issues?: ManifestIssue[];
 }
@@ -183,7 +206,17 @@ export type DataverseAttributeType =
   | "Boolean"
   | "Uniqueidentifier"
   | "Lookup"
-  | "Choice";
+  | "Choice"
+  /** Dataverse File column — stores any blob. Bytes uploaded out-of-band. */
+  | "File"
+  /** Dataverse Image column — stores image bytes with thumbnails. */
+  | "Image"
+  /**
+   * Special sentinel: not a Dataverse column. Bytes for the row are written
+   * as an `annotation` (note) attachment instead. SchemaCreator skips it;
+   * DataLoader uploads via POST /annotations after row insert.
+   */
+  | "NoteAttachment";
 
 export interface FieldMapping {
   accessTable: string;
@@ -212,6 +245,13 @@ export interface FieldMapping {
    * loader uses it to translate raw row labels into integer values at insert.
    */
   choiceOptions?: Array<{ value: number; label: string }>;
+  /**
+   * For File / Image columns: max size in KB written into the attribute
+   * metadata at create time. Defaults: File = 32768 (32 MB),
+   * Image = 30720 (30 MB). Plan builder may bump this when scan-phase
+   * sampling saw a larger blob.
+   */
+  binaryMaxSizeKb?: number;
 }
 
 export interface TableMapping {
@@ -247,8 +287,10 @@ export interface MigrationPlan {
  * Special handling:
  * - Dates serialized as ISO 8601 UTC strings.
  * - Booleans as true/false.
- * - Binary / OLE Object / Attachment columns are NEVER emitted (the helper
- *   logs a ManifestIssue with category "UnsupportedType").
+ * - Binary / OLE Object / Attachment cells are NEVER emitted in NDJSON
+ *   (would bloat annotation storage). The migrate phase re-opens the
+ *   source .accdb on the local machine to stream bytes directly into
+ *   Dataverse File / Image columns or note annotations.
  * - Memo fields stay as full strings.
  * - Currency / Decimal as JSON numbers (precision preserved by the helper).
  */

@@ -19,6 +19,7 @@ namespace AccessToPower.Helper.Services;
 public static class DaoEnricher
 {
     private const int DbAttachment = 101;
+    private const int DbMemo = 12;
     // DisplayControl values that mean "this column is presented as a Choice
     // picker in the Access UI". 109 = ComboBox, 111 = ListBox (yes the docs
     // are confusing — old constants).
@@ -104,7 +105,10 @@ public static class DaoEnricher
                     }
                     catch { /* IsComplex missing on older DAO — ignore */ }
 
-                    // 2. Attachment (DAO field type 101 = dbAttachment).
+                    // 2. Attachment (DAO field type 101 = dbAttachment) +
+                    //    Memo (DAO field type 12 = dbMemo). Memo is the
+                    //    backstop for the ACE OLEDB schema-rowset ambiguity
+                    //    where TEXT and MEMO both report as VarWChar.
                     try
                     {
                         var ftype = (short)f.Type;
@@ -119,6 +123,11 @@ public static class DaoEnricher
                                 "the column is created in Dataverse but rows will be empty. " +
                                 "Use a Dataverse File column + a one-off file upload after migration.");
                             continue;
+                        }
+                        if (ftype == DbMemo && col.DataType == "Text")
+                        {
+                            col.DataType = "Memo";
+                            col.MaxLength = null;
                         }
                     }
                     catch { /* Type missing — ignore */ }

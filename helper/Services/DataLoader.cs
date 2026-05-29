@@ -48,6 +48,20 @@ public sealed class DataLoader
     public sealed class IdMap : Dictionary<string, Dictionary<string, Guid>> { }
 
     public async Task<IdMap> RunAsync(Guid jobId, MigrationPlan plan, CancellationToken ct)
+        => await RunAsync(jobId, plan, accessReader: null, ct).ConfigureAwait(false);
+
+    /// <summary>
+    /// Pass 1 data load + per-row binary uploads.
+    /// 
+    /// When <paramref name="accessReader"/> is non-null and the plan has
+    /// File / Image / NoteAttachment-targeted columns, this method re-reads
+    /// each row's binary cells out of the source .accdb and uploads the
+    /// bytes to the matching Dataverse File / Image column or annotation
+    /// record after the row has been successfully created. A null reader
+    /// (or a table with no binary columns) leaves the existing scalar load
+    /// path entirely untouched.
+    /// </summary>
+    public async Task<IdMap> RunAsync(Guid jobId, MigrationPlan plan, AccessReader? accessReader, CancellationToken ct)
     {
         var idMap = new IdMap();
         var migrateTables = plan.TableMappings.Where(t => t.Action == "Migrate").ToList();
@@ -101,6 +115,21 @@ public sealed class DataLoader
             idMap[tableLogical] = perTableMap;
 
             var pkColumn = accessTable.Columns.FirstOrDefault(c => c.IsPrimaryKey)?.Name;
+
+            // Per-table binary plan: any mapped field whose Dataverse target
+            // is File, Image, or NoteAttachment. Skipped fields are excluded.
+            // Computed once per table so the inner row loop stays cheap.
+            var binaryFields = tm.Fields
+                .Where(f => f.Action == "Map" && f.DataverseType is "File" or "Image" or "NoteAttachment")
+                .ToList();
+            var canUploadBinary = binaryFields.Count > 0 && accessReader is not null && pkColumn is not null;
+            if (binaryFields.Count > 0 && accessReader is null)
+            {
+                Report("log",
+                    $"{accessTable.Name}: {binaryFields.Count} binary column(s) targeted but the source .accdb was not opened — bytes will NOT be migrated. Re-run with the database accessible to upload binaries.",
+                    severity: "warn");
+            }
+            var binaryFailures = new List<BinaryUploadFailure>();
 
             // System-required-field defaults for OOB tables (e.g. `product`
             // demands `defaultuomscheduleid` + `defaultuomid` on every row).
@@ -196,6 +225,14 @@ public sealed class DataLoader
                                 && pkVal is not null)
                             {
                                 perTableMap[Convert.ToString(pkVal, CultureInfo.InvariantCulture) ?? ""] = id;
+
+                                if (canUploadBinary)
+                                {
+                                    await UploadRowBinariesAsync(
+                                        tm, tableLogical, entitySet, id, accessTable.Name,
+                                        pkColumn!, pkVal, sourceRow, binaryFields,
+                                        accessReader!, binaryFailures, ct).ConfigureAwait(false);
+                                }
                             }
                             loaded++;
                         }
@@ -219,6 +256,14 @@ public sealed class DataLoader
                 await PersistRejectedAsync(jobId, tm.AccessTable, rejectedRows, ct).ConfigureAwait(false);
                 Report("log",
                     $"{accessTable.Name}: {rejectedRows.Count} rejected row(s) written to {RejectedFileName(tm.AccessTable)}",
+                    severity: "warn");
+            }
+
+            if (binaryFailures.Count > 0)
+            {
+                await PersistBinaryFailuresAsync(jobId, tm.AccessTable, binaryFailures, ct).ConfigureAwait(false);
+                Report("log",
+                    $"{accessTable.Name}: {binaryFailures.Count} binary upload(s) failed; details in {BinaryFailuresFileName(tm.AccessTable)}",
                     severity: "warn");
             }
 
@@ -566,6 +611,12 @@ public sealed class DataLoader
             if (f.Action != "Map") continue;
             if (pkColumns.Contains(f.AccessColumn)) continue;        // Dataverse generates its own GUID
             if (f.DataverseType == "Lookup") continue;                // pass 2
+            // File / Image / NoteAttachment bytes are uploaded out-of-band
+            // (see UploadBinaryColumnAsync / CreateAnnotationForRecordAsync).
+            // Including them in the create JSON body would either error out
+            // (File/Image — Dataverse rejects scalar set) or just be ignored
+            // (NoteAttachment — not a column at all).
+            if (f.DataverseType is "File" or "Image" or "NoteAttachment") continue;
 
             row.TryGetValue(f.AccessColumn, out var v);
 
@@ -919,6 +970,147 @@ public sealed class DataLoader
         }
         await _dv.ReplaceAnnotationTextAsync(jobId, RejectedFileName(accessTable), "application/x-ndjson", sb.ToString(), ct)
             .ConfigureAwait(false);
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* Binary upload (File / Image / NoteAttachment)                      */
+    /* ------------------------------------------------------------------ */
+
+    private sealed record BinaryUploadFailure(
+        string AccessTable,
+        string AccessColumn,
+        string DataverseTarget,
+        string PkValue,
+        Guid? RecordId,
+        string ErrorCode,
+        string ErrorMessage);
+
+    private static string BinaryFailuresFileName(string accessTable)
+        => $"{SafeFileSegment(accessTable)}-binary-errors.ndjson";
+
+    private async Task UploadRowBinariesAsync(
+        TableMapping tm,
+        string tableLogical,
+        string entitySet,
+        Guid recordId,
+        string accessTableName,
+        string pkColumn,
+        object pkValue,
+        Dictionary<string, object?> sourceRow,
+        List<FieldMapping> binaryFields,
+        AccessReader reader,
+        List<BinaryUploadFailure> failures,
+        CancellationToken ct)
+    {
+        var pkText = Convert.ToString(pkValue, CultureInfo.InvariantCulture) ?? "";
+        foreach (var f in binaryFields)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            byte[]? raw;
+            try
+            {
+                raw = reader.ReadBinaryCell(accessTableName, pkColumn, pkValue, f.AccessColumn);
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new BinaryUploadFailure(
+                    accessTableName, f.AccessColumn, f.DataverseType, pkText, recordId,
+                    "AccessReadFailed", ex.Message));
+                continue;
+            }
+            if (raw is null || raw.Length == 0) continue;
+
+            // Strip OLE Package wrapper if scan detected one for this column.
+            byte[] payload = raw;
+            var accessCol = sourceRow is null ? null : tm.Fields.FirstOrDefault(x => x.AccessColumn == f.AccessColumn);
+            // BinaryHint lives on the manifest, not the plan. We re-detect
+            // wrapper presence cheaply from the bytes themselves: if the
+            // sniff at offset 0 is "binary" but an embedded magic is found
+            // a few bytes in, StripWrapper will return the inner payload.
+            payload = BinarySniffer.StripWrapper(raw);
+
+            var head = payload.Length > 4096 ? payload.AsSpan(0, 4096).ToArray() : payload;
+            var (kind, mime, _) = BinarySniffer.Sniff(head);
+            var mimeType = mime ?? "application/octet-stream";
+            var ext = GuessExtension(mimeType, kind);
+            var safePk = SafeFileSegment(pkText);
+            var fileName = $"{SafeFileSegment(accessTableName)}_{safePk}_{SafeFileSegment(f.AccessColumn)}{ext}";
+
+            // Honour per-column size cap defined in the plan (the planner
+            // adds 1 MB slack on top of the observed max). 0 / null = no cap.
+            if (f.BinaryMaxSizeKb is int capKb && capKb > 0 && payload.Length > capKb * 1024L)
+            {
+                failures.Add(new BinaryUploadFailure(
+                    accessTableName, f.AccessColumn, f.DataverseType, pkText, recordId,
+                    "BinaryTooLarge",
+                    $"Payload {payload.Length / 1024} KB exceeds column cap {capKb} KB."));
+                continue;
+            }
+
+            try
+            {
+                if (f.DataverseType == "NoteAttachment")
+                {
+                    await _dv.CreateAnnotationForRecordAsync(
+                        tableLogical, recordId, fileName, mimeType, payload, ct).ConfigureAwait(false);
+                }
+                else // File or Image
+                {
+                    var columnLogical = f.DataverseSchemaName.ToLowerInvariant();
+                    await _dv.UploadBinaryColumnAsync(
+                        entitySet, recordId, columnLogical, fileName, mimeType, payload, ct).ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                failures.Add(new BinaryUploadFailure(
+                    accessTableName, f.AccessColumn, f.DataverseType, pkText, recordId,
+                    "UploadFailed", ex.Message));
+            }
+        }
+    }
+
+    private async Task PersistBinaryFailuresAsync(Guid jobId, string accessTable, List<BinaryUploadFailure> failures, CancellationToken ct)
+    {
+        var sb = new StringBuilder();
+        foreach (var r in failures)
+        {
+            var obj = new JsonObject
+            {
+                ["accessTable"] = r.AccessTable,
+                ["accessColumn"] = r.AccessColumn,
+                ["dataverseTarget"] = r.DataverseTarget,
+                ["pkValue"] = r.PkValue,
+                ["recordId"] = r.RecordId?.ToString("D"),
+                ["errorCode"] = r.ErrorCode,
+                ["errorMessage"] = r.ErrorMessage,
+            };
+            sb.Append(obj.ToJsonString()).Append('\n');
+        }
+        await _dv.ReplaceAnnotationTextAsync(jobId, BinaryFailuresFileName(accessTable), "application/x-ndjson", sb.ToString(), ct)
+            .ConfigureAwait(false);
+    }
+
+    private static string GuessExtension(string mime, string kind)
+    {
+        if (string.IsNullOrEmpty(mime)) return "";
+        switch (mime)
+        {
+            case "image/jpeg": return ".jpg";
+            case "image/png": return ".png";
+            case "image/gif": return ".gif";
+            case "image/webp": return ".webp";
+            case "image/bmp": return ".bmp";
+            case "application/pdf": return ".pdf";
+            case "application/vnd.openxmlformats-officedocument.wordprocessingml.document": return ".docx";
+            case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": return ".xlsx";
+            case "application/vnd.openxmlformats-officedocument.presentationml.presentation": return ".pptx";
+            case "application/vnd.ms-word": return ".doc";
+            case "application/vnd.ms-excel": return ".xls";
+            case "application/vnd.ms-powerpoint": return ".ppt";
+            default: return ".bin";
+        }
     }
 
     /* ------------------------------------------------------------------ */

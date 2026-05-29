@@ -10,8 +10,8 @@
     <AssemblyName>AccessToPowerHelper</AssemblyName>
     <RootNamespace>AccessToPower.Helper</RootNamespace>
     <ApplicationIcon></ApplicationIcon>
-    <Version>0.1.0</Version>
-    <FileVersion>0.1.0.0</FileVersion>
+    <Version>0.1.1</Version>
+    <FileVersion>0.1.1.0</FileVersion>
     <Company>Access to Power</Company>
     <Product>Access to Power Helper</Product>
     <Description>Reads Microsoft Access databases and uploads schema + data to Dataverse for migration.</Description>

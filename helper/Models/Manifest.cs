@@ -72,7 +72,17 @@ public sealed class AccessColumn
     [JsonPropertyName("valueList")] public List<string>? ValueList { get; set; }
     [JsonPropertyName("limitToList")] public bool? LimitToList { get; set; }
     [JsonPropertyName("unsupportedReason")] public string? UnsupportedReason { get; set; }
+    [JsonPropertyName("binaryHint")] public BinaryHint? BinaryHint { get; set; }
     [JsonPropertyName("issues")] public List<ManifestIssue>? Issues { get; set; }
+}
+
+public sealed class BinaryHint
+{
+    [JsonPropertyName("detectedKind")] public string DetectedKind { get; set; } = "binary";
+    [JsonPropertyName("sampleMime")] public string? SampleMime { get; set; }
+    [JsonPropertyName("hasOleWrapper")] public bool? HasOleWrapper { get; set; }
+    [JsonPropertyName("maxBytes")] public long? MaxBytes { get; set; }
+    [JsonPropertyName("sampleSize")] public int? SampleSize { get; set; }
 }
 
 public sealed class AccessIndex

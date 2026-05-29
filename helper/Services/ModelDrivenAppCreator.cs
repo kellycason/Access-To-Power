@@ -45,7 +45,7 @@ public sealed class ModelDrivenAppCreator
         var appName = string.IsNullOrWhiteSpace(appDisplayName) ? $"{Capitalize(prefix)} Migration App" : appDisplayName;
 
         Report(5, "phase", "Resolving entity metadata ids…");
-        var entities = new List<(string Logical, Guid MetadataId, string DisplayName, string PrimaryNameAttribute, TableMapping Mapping)>();
+        var entities = new List<(string Logical, Guid MetadataId, string DisplayName, string PrimaryNameAttribute, HashSet<string> ExistingAttrs, TableMapping Mapping)>();
         for (int i = 0; i < migrate.Count; i++)
         {
             ct.ThrowIfCancellationRequested();
@@ -53,8 +53,12 @@ public sealed class ModelDrivenAppCreator
             var logical = (t.DataverseSchemaName ?? "").ToLowerInvariant();
             var pct = 5 + (int)(20.0 * (i + 1) / migrate.Count);
             Report(pct, "log", $"Looking up entity {logical}…", entityLogicalName: logical);
+            // Expand Attributes so we know which plan fields actually got created.
+            // SchemaCreator drops Integer PK columns (Dataverse auto-generates the
+            // <entity>id GUID PK instead) — without this filter the form and view
+            // builders emit XML referencing nonexistent columns.
             using var doc = await _dv.GetJsonAsync(
-                $"EntityDefinitions(LogicalName='{logical}')?$select=MetadataId,DisplayName,PrimaryNameAttribute",
+                $"EntityDefinitions(LogicalName='{logical}')?$select=MetadataId,DisplayName,PrimaryNameAttribute&$expand=Attributes($select=LogicalName)",
                 ct).ConfigureAwait(false);
             var root = doc.RootElement;
             var metaId = Guid.Parse(root.GetProperty("MetadataId").GetString()!);
@@ -64,7 +68,19 @@ public sealed class ModelDrivenAppCreator
             var primaryName = root.TryGetProperty("PrimaryNameAttribute", out var pn) && pn.ValueKind == JsonValueKind.String
                 ? pn.GetString() ?? $"{prefix}_name"
                 : $"{prefix}_name";
-            entities.Add((logical, metaId, displayLabel, primaryName, t));
+            var existingAttrs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            if (root.TryGetProperty("Attributes", out var attrsArr) && attrsArr.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var a in attrsArr.EnumerateArray())
+                {
+                    if (a.TryGetProperty("LogicalName", out var ln) && ln.ValueKind == JsonValueKind.String)
+                    {
+                        var name = ln.GetString();
+                        if (!string.IsNullOrEmpty(name)) existingAttrs.Add(name);
+                    }
+                }
+            }
+            entities.Add((logical, metaId, displayLabel, primaryName, existingAttrs, t));
         }
 
         Report(30, "phase", "Building sitemap XML…");
@@ -96,7 +112,7 @@ public sealed class ModelDrivenAppCreator
             var pct = 82 + (int)(3.0 * (i + 1) / entities.Count);
             try
             {
-                var added = await UpdateMainFormAsync(e.Logical, e.PrimaryNameAttribute, e.Mapping, solutionUniqueName, ct).ConfigureAwait(false);
+                var added = await UpdateMainFormAsync(e.Logical, e.PrimaryNameAttribute, e.ExistingAttrs, e.Mapping, solutionUniqueName, ct).ConfigureAwait(false);
                 Report(pct, "log", $"Form for {e.Logical}: {added} field(s) on layout.", entityLogicalName: e.Logical);
             }
             catch (Exception ex)
@@ -115,7 +131,7 @@ public sealed class ModelDrivenAppCreator
             var pct = 85 + (int)(2.0 * (i + 1) / entities.Count);
             try
             {
-                var added = await UpdateMainViewAsync(e.Logical, e.PrimaryNameAttribute, e.Mapping, solutionUniqueName, ct).ConfigureAwait(false);
+                var added = await UpdateMainViewAsync(e.Logical, e.PrimaryNameAttribute, e.ExistingAttrs, e.Mapping, solutionUniqueName, ct).ConfigureAwait(false);
                 Report(pct, "log", $"View for {e.Logical}: {added} column(s) on layout.", entityLogicalName: e.Logical);
             }
             catch (Exception ex)
@@ -353,6 +369,7 @@ public sealed class ModelDrivenAppCreator
     private async Task<int> UpdateMainFormAsync(
         string entityLogicalName,
         string primaryNameAttribute,
+        HashSet<string> existingAttrs,
         TableMapping mapping,
         string? solutionUniqueName,
         CancellationToken ct)
@@ -384,6 +401,14 @@ public sealed class ModelDrivenAppCreator
             var logical = f.DataverseSchemaName.ToLowerInvariant();
             if (string.Equals(logical, primaryNameAttribute, StringComparison.OrdinalIgnoreCase)) continue; // already added
             if (string.Equals(f.DataverseType, "Uniqueidentifier", StringComparison.OrdinalIgnoreCase)) continue;
+            // NoteAttachment doesn't bind to a column — data lands as annotations
+            // on the record. They surface via the entity's Timeline / Notes pane,
+            // not via a form control, so there's nothing to render here.
+            if (string.Equals(f.DataverseType, "NoteAttachment", StringComparison.OrdinalIgnoreCase)) continue;
+            // Skip plan fields that weren't actually created on the entity
+            // (e.g. SchemaCreator drops Integer PK columns because Dataverse
+            // auto-generates an <entity>id GUID PK instead).
+            if (existingAttrs.Count > 0 && !existingAttrs.Contains(logical)) continue;
             var classId = ControlClassIdFor(f.DataverseType);
             if (classId is null) continue; // unknown type — skip rather than corrupt the form
             var label = string.IsNullOrWhiteSpace(f.DataverseDisplayName) ? logical : f.DataverseDisplayName;
@@ -457,6 +482,11 @@ public sealed class ModelDrivenAppCreator
         "Boolean" => "{B0C6723A-8503-4fd7-BB28-C8A06AC933C2}",
         "Lookup" => "{270BD3DB-D9AF-4782-9025-509E298DEC0A}",
         "Choice" => "{3EF39988-22BB-4f0b-BBBE-64B5A3748AEE}",
+        // File / Image columns render with their dedicated controls so the
+        // form shows an upload picker / thumbnail rather than a raw GUID.
+        // Classids verified from real formxml in the target environment.
+        "File" => "{0A7FF475-B016-4687-9CE5-042BFDBD6519}",
+        "Image" => "{7E548B0D-209C-477B-9DCD-F0F44472381D}",
         _ => null,
     };
 
@@ -469,20 +499,22 @@ public sealed class ModelDrivenAppCreator
     private async Task<int> UpdateMainViewAsync(
         string entityLogicalName,
         string primaryNameAttribute,
+        HashSet<string> existingAttrs,
         TableMapping mapping,
         string? solutionUniqueName,
         CancellationToken ct)
     {
         var safeLogical = entityLogicalName.Replace("'", "''");
-        // querytype=64 is the "Public View" used as the default for the entity
-        // in model-driven apps. There can be several; we pick the one already
-        // flagged as default. Falling back to the first if none is marked.
+        // querytype=0 is the Public View — this is the "Active X" grid the user
+        // sees when they click the entity in the MDA sitemap. querytype=64 is
+        // the Lookup popup, not the grid. Pick the isdefault=true one; fall
+        // back to the first if none is flagged.
         using var listDoc = await _dv.GetJsonAsync(
-            $"savedqueries?$select=savedqueryid,name,isdefault,layoutxml,fetchxml&$filter=returnedtypecode eq '{Uri.EscapeDataString(safeLogical)}' and querytype eq 64&$top=10",
+            $"savedqueries?$select=savedqueryid,name,isdefault,layoutxml,fetchxml&$filter=returnedtypecode eq '{Uri.EscapeDataString(safeLogical)}' and querytype eq 0&$top=10",
             ct).ConfigureAwait(false);
         var arr = listDoc.RootElement.GetProperty("value");
         if (arr.GetArrayLength() == 0)
-            throw new InvalidOperationException($"No public view (querytype=64) found for {entityLogicalName}.");
+            throw new InvalidOperationException($"No public view (querytype=0) found for {entityLogicalName}.");
 
         // Pick the default one if present, else first.
         var pick = arr[0];
@@ -511,6 +543,17 @@ public sealed class ModelDrivenAppCreator
             if (string.Equals(logical, primaryNameAttribute, StringComparison.OrdinalIgnoreCase)) continue;
             if (string.Equals(f.DataverseType, "Uniqueidentifier", StringComparison.OrdinalIgnoreCase)) continue;
             if (string.Equals(f.DataverseType, "Memo", StringComparison.OrdinalIgnoreCase)) continue; // too wide for grid
+            // Binary content is not meaningful in a list view (no usable string
+            // projection) and File/Image attributes can't be sorted/filtered
+            // through fetchxml the way scalars can, so leave them off the grid.
+            if (string.Equals(f.DataverseType, "File", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(f.DataverseType, "Image", StringComparison.OrdinalIgnoreCase)) continue;
+            if (string.Equals(f.DataverseType, "NoteAttachment", StringComparison.OrdinalIgnoreCase)) continue;
+            // Skip plan fields not actually created on the entity (see
+            // UpdateMainFormAsync for the why). fetchxml validation in
+            // Dataverse rejects unknown attribute names with 0x8004f037,
+            // which kills the entire view PATCH.
+            if (existingAttrs.Count > 0 && !existingAttrs.Contains(logical)) continue;
             if (ControlClassIdFor(f.DataverseType) is null) continue;
             cols.Add((logical, ColumnWidthFor(f.DataverseType)));
             if (cols.Count >= 10) break; // 10 cols is plenty for a default grid

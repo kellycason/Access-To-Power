@@ -213,6 +213,151 @@ public sealed class DataverseClient : IDisposable
     }
 
     /// <summary>
+    /// Uploads bytes into a Dataverse File or Image column via the single-
+    /// request PATCH pattern (supported up to ~128 MB for File and ~30 MB
+    /// for Image; chunked upload would be needed for larger files).
+    ///
+    /// Returns the HTTP status text on failure so callers can surface it
+    /// alongside other per-row migration errors. Honours <c>Retry-After</c>
+    /// on 429/503 with capped exponential backoff.
+    /// </summary>
+    public async Task UploadBinaryColumnAsync(
+        string entitySet,
+        Guid recordId,
+        string columnLogical,
+        string fileName,
+        string mimeType,
+        byte[] bytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entitySet);
+        ArgumentException.ThrowIfNullOrWhiteSpace(columnLogical);
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (bytes.Length == 0) throw new ArgumentException("Bytes must not be empty.", nameof(bytes));
+
+        var path = $"{entitySet}({recordId:D})/{columnLogical}";
+        var safeName = SanitizeFileNameForHeader(fileName);
+
+        for (var attempt = 0; ; attempt++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Patch, path);
+            var content = new ByteArrayContent(bytes);
+            content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+            req.Content = content;
+            req.Headers.TryAddWithoutValidation("x-ms-file-name", safeName);
+            req.Headers.TryAddWithoutValidation("If-None-Match", "null");
+
+            var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) { resp.Dispose(); return; }
+
+            if (((int)resp.StatusCode == 429 || (int)resp.StatusCode == 503) && attempt < 5)
+            {
+                var wait = ComputeBinaryRetryDelayMs(resp, attempt);
+                resp.Dispose();
+                await Task.Delay(wait, ct).ConfigureAwait(false);
+                continue;
+            }
+
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            resp.Dispose();
+            throw new HttpRequestException(
+                $"PATCH {path} for File/Image upload returned {(int)resp.StatusCode}: {Truncate(body, 400)}");
+        }
+    }
+
+    /// <summary>
+    /// Creates an annotation (note) attachment on the given parent record.
+    /// Used to migrate Access Attachment columns and any binary-typed column
+    /// the user routed to NoteAttachment in MapStep. The annotation's
+    /// <c>documentbody</c> carries base64-encoded bytes — fine for blobs up
+    /// to a few MB but not recommended for large files (use a File column
+    /// for those).
+    /// </summary>
+    public async Task CreateAnnotationForRecordAsync(
+        string entityLogicalName,
+        Guid recordId,
+        string fileName,
+        string mimeType,
+        byte[] bytes,
+        CancellationToken ct)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(entityLogicalName);
+        ArgumentNullException.ThrowIfNull(bytes);
+        if (bytes.Length == 0) throw new ArgumentException("Bytes must not be empty.", nameof(bytes));
+
+        var b64 = Convert.ToBase64String(bytes);
+        var entitySet = await ResolveEntitySetForAnnotationBindAsync(entityLogicalName, ct).ConfigureAwait(false);
+        var payload =
+            $"{{\"subject\":{JsonSerializer.Serialize(fileName)}," +
+            $"\"filename\":{JsonSerializer.Serialize(fileName)}," +
+            $"\"mimetype\":{JsonSerializer.Serialize(mimeType)}," +
+            $"\"documentbody\":\"{b64}\"," +
+            $"\"objectid_{entityLogicalName}@odata.bind\":\"/{entitySet}({recordId:D})\"}}";
+
+        for (var attempt = 0; ; attempt++)
+        {
+            using var req = new HttpRequestMessage(HttpMethod.Post, "annotations")
+            {
+                Content = new StringContent(payload, Encoding.UTF8, "application/json"),
+            };
+            var resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
+            if (resp.IsSuccessStatusCode) { resp.Dispose(); return; }
+            if (((int)resp.StatusCode == 429 || (int)resp.StatusCode == 503) && attempt < 5)
+            {
+                var wait = ComputeBinaryRetryDelayMs(resp, attempt);
+                resp.Dispose();
+                await Task.Delay(wait, ct).ConfigureAwait(false);
+                continue;
+            }
+            var body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
+            resp.Dispose();
+            throw new HttpRequestException(
+                $"POST /annotations for {entityLogicalName}({recordId:D}) returned {(int)resp.StatusCode}: {Truncate(body, 400)}");
+        }
+    }
+
+    private readonly Dictionary<string, string> _entitySetCache = new(StringComparer.OrdinalIgnoreCase);
+
+    private async Task<string> ResolveEntitySetForAnnotationBindAsync(string entityLogicalName, CancellationToken ct)
+    {
+        if (_entitySetCache.TryGetValue(entityLogicalName, out var cached)) return cached;
+        var url = $"EntityDefinitions(LogicalName='{entityLogicalName}')?$select=EntitySetName";
+        using var resp = await _http.GetAsync(url, ct).ConfigureAwait(false);
+        await EnsureSuccessAsync(resp, ct).ConfigureAwait(false);
+        await using var stream = await resp.Content.ReadAsStreamAsync(ct).ConfigureAwait(false);
+        using var doc = await JsonDocument.ParseAsync(stream, cancellationToken: ct).ConfigureAwait(false);
+        var setName = doc.RootElement.GetProperty("EntitySetName").GetString()
+            ?? throw new InvalidOperationException($"No EntitySetName for {entityLogicalName}.");
+        _entitySetCache[entityLogicalName] = setName;
+        return setName;
+    }
+
+    private static int ComputeBinaryRetryDelayMs(HttpResponseMessage resp, int attempt)
+    {
+        if (resp.Headers.RetryAfter is { } h)
+        {
+            if (h.Delta is { } d) return Math.Clamp((int)d.TotalMilliseconds, 1_000, 30_000);
+            if (h.Date is { } when) return Math.Clamp((int)Math.Max(0, (when.UtcDateTime - DateTime.UtcNow).TotalMilliseconds), 1_000, 30_000);
+        }
+        return Math.Min(1_000 * (int)Math.Pow(2, attempt), 30_000);
+    }
+
+    private static string SanitizeFileNameForHeader(string fileName)
+    {
+        // x-ms-file-name carries the file name in an HTTP header which only
+        // accepts ASCII. Replace anything outside ASCII or that could break
+        // header parsing (CR, LF, ", \) with '_'.
+        var sb = new StringBuilder(fileName.Length);
+        foreach (var c in fileName)
+        {
+            if (c < 0x20 || c > 0x7E || c == '"' || c == '\\') sb.Append('_');
+            else sb.Append(c);
+        }
+        var s = sb.ToString();
+        return string.IsNullOrWhiteSpace(s) ? "blob.bin" : s;
+    }
+
+    /// <summary>
     /// Sends an arbitrary <see cref="HttpRequestMessage"/> through the underlying
     /// client without inspecting the response. Used by the data loader so it can
     /// read 429/503 responses (with their <c>Retry-After</c> headers) directly

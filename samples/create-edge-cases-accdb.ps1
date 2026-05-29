@@ -259,6 +259,62 @@ foreach ($r in $responses) {
     Exec "INSERT INTO SurveyResponses (SiteID, ResponseCode, VisitDate, VisitStartedAt, Rating, Priority, Status, MeasuredPh, SampleDepth, IsVerified, Comments, LongNarrative, RichTextNotes) VALUES ($siteId, $(Esc $r.Code), $(DateLit $visitDate), $(DateLit $started), $($r.Rating), $($r.Priority), $(Esc $r.Status), $($r.Ph), $($r.Depth), $($r.Verified), $(Esc $r.Comments), $(Esc $longNarrative), $(Esc $r.Rich))"
 }
 
+# ---- Seed binary cells (RawPayload PDF + LegacyPhoto PNG) ----------
+# Bytes are streamed in via ADO Recordset.AppendChunk because OLEDB SQL
+# literals can't carry a byte[]. We seed two rows so the helper's binary
+# upload pass has a JPEG/PDF/PNG sample to round-trip into Dataverse.
+function UpdateBinaryCell($whereCol, $whereValSql, $targetCol, [byte[]]$bytes) {
+    if (-not $bytes -or $bytes.Length -eq 0) { return }
+    $rs = New-Object -ComObject ADODB.Recordset
+    try {
+        # adOpenKeyset = 1, adLockOptimistic = 3
+        $rs.Open("SELECT * FROM SurveyResponses WHERE $whereCol = $whereValSql", $conn, 1, 3)
+        if ($rs.EOF) {
+            Write-Host "  Skip binary seed: no SurveyResponses row where $whereCol = $whereValSql" -ForegroundColor Yellow
+            return
+        }
+        # AppendChunk accepts a COM SafeArray of bytes; PowerShell's byte[] marshals automatically.
+        $rs.Fields.Item($targetCol).AppendChunk($bytes)
+        $rs.Update()
+        Write-Host "  Seeded $targetCol on $whereCol=$whereValSql ($($bytes.Length) bytes)" -ForegroundColor DarkGreen
+    } catch {
+        Write-Host "  Skipped binary seed for ${targetCol}: $($_.Exception.Message)" -ForegroundColor Yellow
+    } finally {
+        if ($rs.State -ne 0) { $rs.Close() }
+    }
+}
+
+# Minimal valid 1x1 transparent PNG (67 bytes).
+$pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+$pngBytes = [Convert]::FromBase64String($pngB64)
+
+# Minimal valid PDF stub (~ 220 bytes, opens in Adobe Reader as a 0-page doc).
+$pdfText = @"
+%PDF-1.4
+%âãÏÓ
+1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj
+2 0 obj << /Type /Pages /Count 0 /Kids [] >> endobj
+xref
+0 3
+0000000000 65535 f
+0000000015 00000 n
+0000000063 00000 n
+trailer << /Size 3 /Root 1 0 R >>
+startxref
+112
+%%EOF
+"@
+$pdfBytes = [System.Text.Encoding]::Latin1.GetBytes($pdfText)
+
+# Row 1 (R-SEA-001): PDF in RawPayload (Binary)
+UpdateBinaryCell 'ResponseCode' "'R-SEA-001'" 'RawPayload' $pdfBytes
+# Row 2 (R-DEN-001): PNG in LegacyPhoto (OLE Object) — only if the ALTER succeeded
+if ($hasLegacyPhoto) {
+    UpdateBinaryCell 'ResponseCode' "'R-DEN-001'" 'LegacyPhoto' $pngBytes
+}
+# Row 3 (R-MIA-001): PNG in RawPayload too so we exercise image detection in Binary column
+UpdateBinaryCell 'ResponseCode' "'R-MIA-001'" 'RawPayload' $pngBytes
+
 $conn.Close() | Out-Null
 $conn = $null
 [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()

@@ -43,6 +43,19 @@ const DV_TYPES: DataverseAttributeType[] = [
   "Boolean",
 ];
 
+/** Dataverse types the user can pick for an Access binary column. */
+const BINARY_DV_TYPES: DataverseAttributeType[] = [
+  "File",
+  "Image",
+  "NoteAttachment",
+];
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10 * 1024 ? 1 : 0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 /**
  * User-facing labels for each Dataverse attribute type. We keep the internal
  * identifiers (used in plan JSON + schema creator) but render the names a
@@ -63,6 +76,9 @@ const DV_TYPE_LABELS: Record<DataverseAttributeType, string> = {
   Lookup: "Lookup",
   Choice: "Choice",
   Uniqueidentifier: "Unique Identifier",
+  File: "File",
+  Image: "Image",
+  NoteAttachment: "Note Attachment",
 };
 
 /**
@@ -139,6 +155,19 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
   }, [plan, activeTable]);
 
   const current = plan.tableMappings.find((t) => t.accessTable === activeTable);
+
+  // Look up the manifest column for the active row so we can surface
+  // detected MIME type / sample size hints next to binary mappings.
+  const currentManifestTable = current
+    ? manifest.tables.find((t) => t.name === current.accessTable)
+    : undefined;
+  const accessColumnByName = useMemo(() => {
+    const m: Record<string, (typeof manifest)["tables"][number]["columns"][number]> = {};
+    if (currentManifestTable) {
+      for (const c of currentManifestTable.columns) m[c.name] = c;
+    }
+    return m;
+  }, [currentManifestTable]);
 
   // Detect plan-vs-environment collisions: any "create new" mapping whose
   // logical name is already in use by another table in this environment.
@@ -692,31 +721,92 @@ export function MapStep({ manifest, migrationJobId, initialPlan, onPlanReady, on
                         )}
                       </TD>
                       <TD>
-                        {DV_TYPES.includes(f.dataverseType) ? (
-                          <Select
-                            value={f.dataverseType}
-                            disabled={current.targetMode === "existing" && f.targetMode !== "new"}
-                            onChange={(e) => {
-                              const fields = [...current.fields];
-                              fields[i] = {
-                                ...f,
-                                dataverseType: e.target.value as DataverseAttributeType,
-                              };
-                              updateTable({ ...current, fields });
-                            }}
-                          >
-                            {DV_TYPES.map((t) => (
-                              <option key={t} value={t}>
-                                {DV_TYPE_LABELS[t] ?? t}
-                              </option>
-                            ))}
-                          </Select>
-                        ) : (
-                          <span className="text-xs text-ink-500">
-                            {DV_TYPE_LABELS[f.dataverseType] ?? f.dataverseType}
-                            {f.dataverseType === "Lookup" ? " (from relationship)" : ""}
-                          </span>
-                        )}
+                        {(() => {
+                          const accessCol = accessColumnByName[f.accessColumn];
+                          const isAccessBinary =
+                            accessCol &&
+                            (accessCol.dataType === "Binary" ||
+                              accessCol.dataType === "OleObject" ||
+                              accessCol.dataType === "Attachment");
+                          const isBinaryTarget = BINARY_DV_TYPES.includes(f.dataverseType);
+                          // Show a File/Image/NoteAttachment dropdown whenever
+                          // the source is binary OR the user previously chose
+                          // a binary target. Existing-table mode is read-only
+                          // because target attribute type comes from Dataverse.
+                          if (
+                            (isAccessBinary || isBinaryTarget) &&
+                            !(current.targetMode === "existing" && f.targetMode === "existing")
+                          ) {
+                            const hint = accessCol?.binaryHint;
+                            return (
+                              <div className="flex flex-col gap-0.5">
+                                <Select
+                                  value={
+                                    BINARY_DV_TYPES.includes(f.dataverseType)
+                                      ? f.dataverseType
+                                      : (accessCol?.dataType === "Attachment"
+                                          ? "NoteAttachment"
+                                          : hint?.detectedKind === "image"
+                                            ? "Image"
+                                            : "File")
+                                  }
+                                  onChange={(e) => {
+                                    const fields = [...current.fields];
+                                    fields[i] = {
+                                      ...f,
+                                      action: "Map",
+                                      dataverseType: e.target.value as DataverseAttributeType,
+                                    };
+                                    updateTable({ ...current, fields });
+                                  }}
+                                >
+                                  {BINARY_DV_TYPES.map((t) => (
+                                    <option key={t} value={t}>
+                                      {DV_TYPE_LABELS[t] ?? t}
+                                    </option>
+                                  ))}
+                                </Select>
+                                {hint ? (
+                                  <span className="text-[10px] text-ink-500">
+                                    Detected {hint.detectedKind}
+                                    {hint.sampleMime ? ` (${hint.sampleMime})` : ""}
+                                    {hint.maxBytes ? ` · up to ${formatBytes(hint.maxBytes)} observed` : ""}
+                                    {hint.hasOleWrapper ? " · OLE wrapper" : ""}
+                                  </span>
+                                ) : isAccessBinary ? (
+                                  <span className="text-[10px] text-ink-500">
+                                    No sampled bytes — defaulted to File
+                                  </span>
+                                ) : null}
+                              </div>
+                            );
+                          }
+                          return DV_TYPES.includes(f.dataverseType) ? (
+                            <Select
+                              value={f.dataverseType}
+                              disabled={current.targetMode === "existing" && f.targetMode !== "new"}
+                              onChange={(e) => {
+                                const fields = [...current.fields];
+                                fields[i] = {
+                                  ...f,
+                                  dataverseType: e.target.value as DataverseAttributeType,
+                                };
+                                updateTable({ ...current, fields });
+                              }}
+                            >
+                              {DV_TYPES.map((t) => (
+                                <option key={t} value={t}>
+                                  {DV_TYPE_LABELS[t] ?? t}
+                                </option>
+                              ))}
+                            </Select>
+                          ) : (
+                            <span className="text-xs text-ink-500">
+                              {DV_TYPE_LABELS[f.dataverseType] ?? f.dataverseType}
+                              {f.dataverseType === "Lookup" ? " (from relationship)" : ""}
+                            </span>
+                          );
+                        })()}
                       </TD>
                       <TD>
                         {current.targetMode === "existing" ? (

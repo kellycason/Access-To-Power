@@ -14,7 +14,11 @@ import type {
  * - Primary keys are flagged as alternate keys (idempotent re-runs).
  * - Foreign-key source columns default to Skip because Dataverse lookups
  *   preserve the relationship and the raw FK value is still read from NDJSON.
- * - Unsupported types (Binary, OleObject, Attachment) are auto-skipped.
+ * - Binary / OLE Object columns default to a Dataverse File column (or
+ *   Image when scan-time sampling detected image bytes); Attachment columns
+ *   default to a Dataverse note (annotation) attachment. The user can
+ *   override the target — including back to Skip — in MapStep.
+ * - Multivalue / Unknown columns remain auto-skipped (no defensible target).
  * - Relationships are not realised here — they're applied in the
  *   CreateDataverseSchema flow once all tables exist.
  */
@@ -150,19 +154,30 @@ export function buildDefaultPlan(
           dvType === "Choice" && c.valueList && c.valueList.length > 0
             ? c.valueList.map((label, i) => ({ value: 100000000 + i, label }))
             : undefined;
+        // Default routing for binary-typed Access columns. OleObject + Binary
+        // become a Dataverse File column by default (or Image when scan-time
+        // sampling detected image bytes); Attachment defaults to a note
+        // annotation because a single annotation row supports multiple
+        // attached files, matching Access Attachment semantics.
+        const binaryDefault = defaultBinaryTarget(c);
+        const effectiveDvType: TableMapping["fields"][number]["dataverseType"] =
+          binaryDefault?.dataverseType ?? dvType;
+        const effectiveAction: "Map" | "Skip" =
+          binaryDefault ? "Map" : supported ? "Map" : "Skip";
         return {
           accessTable: t.name,
           accessColumn: c.name,
-          action: supported ? "Map" : "Skip",
+          action: effectiveAction,
           targetMode: "new",
           dataverseSchemaName: `${prefix}_${colSlug}`,
           dataverseDisplayName: c.name,
-          dataverseType: dvType,
+          dataverseType: effectiveDvType,
           maxLength: c.maxLength,
           precision,
           isAlternateKey: c.isPrimaryKey,
           isRequired: c.isRequired,
           choiceOptions,
+          binaryMaxSizeKb: binaryDefault?.maxSizeKb,
         };
       }),
     };
@@ -188,6 +203,42 @@ function collectForeignKeyColumns(manifest: AccessSchemaManifest): Set<string> {
 
 function isSupported(t: string): boolean {
   return !["Binary", "OleObject", "Attachment", "Multivalue", "Unknown"].includes(t);
+}
+
+/**
+ * Compute the default Dataverse target for an Access binary-typed column.
+ * Returns null for non-binary columns so the caller falls back to its
+ * regular type mapping.
+ *
+ * Routing:
+ *  - Attachment      → NoteAttachment (one annotation per row; preserves
+ *                       multi-file semantics of Access Attachment cells).
+ *  - Binary/OleObject with image bytes detected → Image column.
+ *  - Binary/OleObject with anything else (or no scan-time data) → File column.
+ *
+ * `maxSizeKb` rounds detected max-bytes up to the next 1 MB and clamps to
+ * the Dataverse defaults (File: 128 MB / Image: 30 MB) so we don't ask
+ * Dataverse for a smaller column than the customer's data already exceeds.
+ */
+function defaultBinaryTarget(c: AccessColumn): {
+  dataverseType: "File" | "Image" | "NoteAttachment";
+  maxSizeKb?: number;
+} | null {
+  if (c.dataType === "Attachment") {
+    return { dataverseType: "NoteAttachment" };
+  }
+  if (c.dataType !== "Binary" && c.dataType !== "OleObject") return null;
+
+  const hint = c.binaryHint;
+  const kind = hint?.detectedKind ?? "binary";
+  const dvType: "File" | "Image" = kind === "image" ? "Image" : "File";
+  const observedKb = hint?.maxBytes ? Math.ceil(hint.maxBytes / 1024) : undefined;
+  // Round up to the next megabyte and add 1 MB of slack so a near-cap
+  // payload doesn't get rejected.
+  const ceiledKb = observedKb ? Math.ceil(observedKb / 1024) * 1024 + 1024 : undefined;
+  const cap = dvType === "Image" ? 30 * 1024 : 128 * 1024;
+  const maxSizeKb = ceiledKb ? Math.min(ceiledKb, cap) : undefined;
+  return { dataverseType: dvType, maxSizeKb };
 }
 
 function mapType(t: string, col?: AccessColumn): TableMapping["fields"][number]["dataverseType"] {

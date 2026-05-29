@@ -42,6 +42,7 @@ public sealed class FieldMapping
     [JsonPropertyName("isRequired")] public bool IsRequired { get; set; }
     [JsonPropertyName("lookupTarget")] public string? LookupTarget { get; set; }
     [JsonPropertyName("choiceOptions")] public List<ChoiceOption>? ChoiceOptions { get; set; }
+    [JsonPropertyName("binaryMaxSizeKb")] public int? BinaryMaxSizeKb { get; set; }
 }
 
 public sealed class ChoiceOption

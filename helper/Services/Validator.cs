@@ -53,6 +53,7 @@ public sealed class Validator
             var expected = accessTable?.RowCount ?? 0;
 
             var rejectedCount = await CountRejectedAsync(jobId, tm.AccessTable, ct).ConfigureAwait(false);
+            var binaryFailureCount = await CountBinaryFailuresAsync(jobId, tm.AccessTable, ct).ConfigureAwait(false);
 
             long actual = 0;
             string status;
@@ -92,6 +93,7 @@ public sealed class Validator
                 ExpectedRows = expected,
                 RejectedRows = rejectedCount,
                 ActualRows = actual,
+                BinaryUploadFailures = binaryFailureCount,
                 Status = status,
                 Message = message,
             };
@@ -101,20 +103,42 @@ public sealed class Validator
             // counts will read green even though those columns are empty.
             if (accessTable is not null)
             {
+                // A binary column is only "dropped" if the user didn't map it
+                // to a Dataverse binary target. When the plan routes it to
+                // File / Image / NoteAttachment we DO migrate the bytes, so
+                // the stale scan-time "Schema-only" warning must be suppressed.
+                bool MappedToBinary(string accessColName) =>
+                    tm.Fields.Any(f =>
+                        string.Equals(f.AccessColumn, accessColName, StringComparison.OrdinalIgnoreCase)
+                        && string.Equals(f.Action, "Map", StringComparison.OrdinalIgnoreCase)
+                        && (f.DataverseType == "File"
+                            || f.DataverseType == "Image"
+                            || f.DataverseType == "NoteAttachment"));
+
                 foreach (var col in accessTable.Columns)
                 {
-                    if (!string.IsNullOrEmpty(col.UnsupportedReason))
+                    var isBinaryCol = col.DataType is "OleObject" or "Binary" or "Attachment";
+                    var migratedAsBinary = isBinaryCol && MappedToBinary(col.Name);
+                    if (!migratedAsBinary)
                     {
-                        line.DroppedColumns.Add($"{col.Name}: {col.UnsupportedReason}");
-                    }
-                    else if (col.DataType is "OleObject" or "Binary" or "Attachment" or "Multivalue")
-                    {
-                        line.DroppedColumns.Add($"{col.Name}: {col.DataType}");
+                        if (!string.IsNullOrEmpty(col.UnsupportedReason))
+                        {
+                            line.DroppedColumns.Add($"{col.Name}: {col.UnsupportedReason}");
+                        }
+                        else if (col.DataType is "OleObject" or "Binary" or "Attachment" or "Multivalue")
+                        {
+                            line.DroppedColumns.Add($"{col.Name}: {col.DataType}");
+                        }
                     }
                     if (col.Issues is null) continue;
                     foreach (var iss in col.Issues)
                     {
                         if (string.Equals(iss.Severity, "Info", StringComparison.OrdinalIgnoreCase)) continue;
+                        // Same suppression — the "data will not migrate" warning
+                        // is wrong when the column is mapped to a binary target.
+                        if (migratedAsBinary
+                            && string.Equals(iss.Category, "UnsupportedType", StringComparison.OrdinalIgnoreCase))
+                            continue;
                         var entry = $"{col.Name}: {iss.Message}";
                         if (!line.Warnings.Contains(entry, StringComparer.Ordinal))
                         {
@@ -146,6 +170,7 @@ public sealed class Validator
         report.TotalExpected = report.Tables.Sum(t => t.ExpectedRows);
         report.TotalRejected = report.Tables.Sum(t => t.RejectedRows);
         report.TotalActual = report.Tables.Sum(t => t.ActualRows);
+        report.TotalBinaryUploadFailures = report.Tables.Sum(t => t.BinaryUploadFailures);
         report.OverallStatus = report.Tables.Any(t => t.Status == "error") ? "error"
                              : report.Tables.Any(t => t.Status is "mismatch" or "extra") ? "mismatch"
                              : report.UnresolvedLookups > 0 ? "partial"
@@ -220,11 +245,15 @@ public sealed class Validator
         sb.Append("<div class='kpi'><b>").Append(report.TotalActual).Append("</b>Loaded rows</div>");
         sb.Append("<div class='kpi'><b>").Append(report.TotalRejected).Append("</b>Rejected rows</div>");
         sb.Append("<div class='kpi'><b>").Append(report.UnresolvedLookups).Append("</b>Unresolved lookups</div>");
+        if (report.TotalBinaryUploadFailures > 0)
+        {
+            sb.Append("<div class='kpi'><b>").Append(report.TotalBinaryUploadFailures).Append("</b>Binary upload failures</div>");
+        }
         sb.Append("</div>");
 
         sb.Append("<h2>Per-table results</h2>");
         sb.Append("<table><thead><tr><th>Access table</th><th>Dataverse table</th>");
-        sb.Append("<th>Expected</th><th>Rejected</th><th>Loaded</th><th>Status</th><th>Notes</th></tr></thead><tbody>");
+        sb.Append("<th>Expected</th><th>Rejected</th><th>Loaded</th><th>Binary errors</th><th>Status</th><th>Notes</th></tr></thead><tbody>");
         foreach (var t in report.Tables)
         {
             sb.Append("<tr>");
@@ -233,6 +262,7 @@ public sealed class Validator
             sb.Append("<td>").Append(t.ExpectedRows).Append("</td>");
             sb.Append("<td>").Append(t.RejectedRows).Append("</td>");
             sb.Append("<td>").Append(t.ActualRows).Append("</td>");
+            sb.Append("<td>").Append(t.BinaryUploadFailures).Append("</td>");
             sb.Append("<td>").Append(statusBadge(t.Status)).Append("</td>");
             sb.Append("<td>");
             if (!string.IsNullOrEmpty(t.Message))
@@ -292,9 +322,11 @@ public sealed class Validator
             using (doc)
             {
                 var dict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-                if (doc.RootElement.TryGetProperty("ErrorCode", out var ec)) dict["_errorCode"] = ec.GetString() ?? "";
-                if (doc.RootElement.TryGetProperty("ErrorMessage", out var em)) dict["_errorMessage"] = em.GetString() ?? "";
-                if (doc.RootElement.TryGetProperty("Row", out var rowEl) && rowEl.ValueKind == JsonValueKind.Object)
+                // NDJSON is camelCase (errorCode/errorMessage/row) — match
+                // case-insensitively so future PascalCase callers also work.
+                if (TryGetPropertyCI(doc.RootElement, "errorCode", out var ec)) dict["_errorCode"] = ec.GetString() ?? "";
+                if (TryGetPropertyCI(doc.RootElement, "errorMessage", out var em)) dict["_errorMessage"] = em.GetString() ?? "";
+                if (TryGetPropertyCI(doc.RootElement, "row", out var rowEl) && rowEl.ValueKind == JsonValueKind.Object)
                 {
                     foreach (var prop in rowEl.EnumerateObject())
                     {
@@ -336,6 +368,23 @@ public sealed class Validator
     {
         if (s.IndexOfAny(new[] { ',', '"', '\r', '\n' }) < 0) return s;
         return "\"" + s.Replace("\"", "\"\"") + "\"";
+    }
+
+    private static bool TryGetPropertyCI(JsonElement root, string name, out JsonElement value)
+    {
+        if (root.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var prop in root.EnumerateObject())
+            {
+                if (string.Equals(prop.Name, name, StringComparison.OrdinalIgnoreCase))
+                {
+                    value = prop.Value;
+                    return true;
+                }
+            }
+        }
+        value = default;
+        return false;
     }
 
     /* ------------------------------------------------------------------ */
@@ -399,6 +448,19 @@ public sealed class Validator
         return count;
     }
 
+    private async Task<long> CountBinaryFailuresAsync(Guid jobId, string accessTable, CancellationToken ct)
+    {
+        var fileName = $"{SafeFileSegment(accessTable)}-binary-errors.ndjson";
+        var text = await _dv.ReadAnnotationTextAsync(jobId, fileName, ct).ConfigureAwait(false);
+        if (string.IsNullOrEmpty(text)) return 0;
+        long count = 0;
+        foreach (var line in text.Split('\n'))
+        {
+            if (line.AsSpan().TrimStart('\uFEFF').Trim(LineTrimChars).Length > 0) count++;
+        }
+        return count;
+    }
+
     private void Report(string kind, string message, string? severity = null, int? progress = null)
         => _report(new ProgressEvent
         {
@@ -429,6 +491,7 @@ public sealed class MigrationReport
     public long TotalRejected { get; set; }
     public long TotalActual { get; set; }
     public int UnresolvedLookups { get; set; }
+    public long TotalBinaryUploadFailures { get; set; }
     public List<TableLine> Tables { get; set; } = new();
 
     public sealed class TableLine
@@ -438,6 +501,13 @@ public sealed class MigrationReport
         public long ExpectedRows { get; set; }
         public long RejectedRows { get; set; }
         public long ActualRows { get; set; }
+        /// <summary>
+        /// Number of File / Image / NoteAttachment uploads that failed for
+        /// this table. Row inserts may still have succeeded — these are
+        /// blob-only failures. Detail lives in
+        /// <c>{table}-binary-errors.ndjson</c>.
+        /// </summary>
+        public long BinaryUploadFailures { get; set; }
         /// <summary>"ok" | "mismatch" | "extra" | "error"</summary>
         public string Status { get; set; } = "ok";
         public string? Message { get; set; }

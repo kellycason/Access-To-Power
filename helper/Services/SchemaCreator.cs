@@ -352,6 +352,14 @@ public sealed class SchemaCreator
             Report("column", $"Skipping {entityLogical}.{attrLogical} — reserved for auto-generated primary key. Update plan to use a different schema name for column '{f.AccessColumn}'.");
             return;
         }
+        // NoteAttachment isn't a Dataverse column at all — the data loader
+        // writes per-row bytes as an `annotation` entity instead. Nothing to
+        // create in the schema phase.
+        if (string.Equals(f.DataverseType, "NoteAttachment", StringComparison.Ordinal))
+        {
+            Report("column", $"{entityLogical}.{attrLogical} → annotation (no column created).");
+            return;
+        }
         var existsPath = $"EntityDefinitions(LogicalName='{entityLogical}')/Attributes(LogicalName='{attrLogical}')?$select=LogicalName";
         if (await _dv.ExistsAsync(existsPath, ct).ConfigureAwait(false))
         {
@@ -473,6 +481,8 @@ public sealed class SchemaCreator
                 },
             },
             "Choice" => BuildChoiceAttribute(f, attrLogical, reqLevel),
+            "File" => BuildFileAttribute(f, attrLogical, reqLevel),
+            "Image" => BuildImageAttribute(f, attrLogical, reqLevel),
             _ => null,
         };
 
@@ -551,6 +561,54 @@ public sealed class SchemaCreator
                 ["OptionSetType"] = "Picklist",
                 ["Options"] = options,
             },
+        };
+    }
+
+    /// <summary>
+    /// Builds a FileAttributeMetadata payload — a Dataverse File column for
+    /// arbitrary blob storage. Bytes are uploaded out-of-band by DataLoader
+    /// via PATCH /entitySet({id})/{column}/$value after each row insert.
+    /// MaxSizeInKB is set from the plan (scan-time max + 1 MB slack) or
+    /// defaults to 32 MB if unknown.
+    /// </summary>
+    private static JsonObject BuildFileAttribute(FieldMapping f, string attrLogical, string reqLevel)
+    {
+        // Dataverse caps File columns at 131072 KB (128 MB).
+        var maxKb = Math.Min(Math.Max(f.BinaryMaxSizeKb ?? 32768, 1), 131072);
+        return new JsonObject
+        {
+            ["@odata.type"] = "Microsoft.Dynamics.CRM.FileAttributeMetadata",
+            ["SchemaName"] = f.DataverseSchemaName,
+            ["LogicalName"] = attrLogical,
+            ["DisplayName"] = Label(f.DataverseDisplayName),
+            ["RequiredLevel"] = new JsonObject { ["Value"] = reqLevel },
+            ["MaxSizeInKB"] = maxKb,
+        };
+    }
+
+    /// <summary>
+    /// Builds an ImageAttributeMetadata payload — a Dataverse Image column
+    /// that stores both a thumbnail and the full-resolution image. Bytes
+    /// are uploaded out-of-band by DataLoader via
+    /// PATCH /entitySet({id})/{column}/$value after each row insert.
+    /// </summary>
+    private static JsonObject BuildImageAttribute(FieldMapping f, string attrLogical, string reqLevel)
+    {
+        // Dataverse caps Image columns at 30720 KB (30 MB).
+        var maxKb = Math.Min(Math.Max(f.BinaryMaxSizeKb ?? 10240, 1), 30720);
+        return new JsonObject
+        {
+            ["@odata.type"] = "Microsoft.Dynamics.CRM.ImageAttributeMetadata",
+            ["SchemaName"] = f.DataverseSchemaName,
+            ["LogicalName"] = attrLogical,
+            ["DisplayName"] = Label(f.DataverseDisplayName),
+            ["RequiredLevel"] = new JsonObject { ["Value"] = reqLevel },
+            // First Image attribute on the entity is auto-marked as primary;
+            // setting false explicitly avoids surprises when migrating a
+            // table with multiple image columns.
+            ["IsPrimaryImage"] = false,
+            ["CanStoreFullImage"] = true,
+            ["MaxSizeInKB"] = maxKb,
         };
     }
 

@@ -266,8 +266,68 @@ public partial class MainWindow : Window
 
         // Pass 1: bulk row inserts (lookups left blank, FK→GUID map captured).
         var loader = new DataLoader(dv, forward);
+
+        // If the plan targets any File / Image / NoteAttachment column, we need
+        // the source .accdb open so the loader can stream bytes straight into
+        // Dataverse (they're never stored in annotations or local disk).
+        // Falls back to a file picker when the manifest's recorded path no
+        // longer resolves on this machine.
+        AccessReader? binaryReader = null;
+        var hasBinaryTargets = plan.TableMappings.Any(t =>
+            t.Action == "Migrate" && t.Fields.Any(f =>
+                f.Action == "Map" &&
+                (f.DataverseType is "File" or "Image" or "NoteAttachment")));
+        if (hasBinaryTargets)
+        {
+            var dbPath = plan.Manifest?.SourcePath;
+            if (string.IsNullOrWhiteSpace(dbPath) || !System.IO.File.Exists(dbPath))
+            {
+                OrchLog("log",
+                    $"Plan needs binary uploads but the original database path ({dbPath ?? "<none>"}) is not accessible. Prompting for file…",
+                    severity: "warn");
+                dbPath = await Dispatcher.InvokeAsync(() =>
+                {
+                    var dlg = new Microsoft.Win32.OpenFileDialog
+                    {
+                        Title = "Locate the source Access database to upload binary columns",
+                        Filter = "Access databases (*.accdb;*.mdb)|*.accdb;*.mdb|All files (*.*)|*.*",
+                        CheckFileExists = true,
+                    };
+                    return dlg.ShowDialog() == true ? dlg.FileName : null;
+                });
+            }
+            if (!string.IsNullOrWhiteSpace(dbPath) && System.IO.File.Exists(dbPath))
+            {
+                try
+                {
+                    binaryReader = new AccessReader(dbPath);
+                    OrchLog("log", $"Opened {dbPath} for binary upload pass.");
+                }
+                catch (Exception ex)
+                {
+                    OrchLog("log",
+                        $"Could not open {dbPath} for binary upload: {ex.Message}. Bytes will NOT be migrated; row inserts will continue.",
+                        severity: "warn");
+                }
+            }
+            else
+            {
+                OrchLog("log",
+                    "No source database selected — binary columns will be created but their bytes will NOT be uploaded.",
+                    severity: "warn");
+            }
+        }
+
         OrchLog("phase", "Starting Pass 1: DataLoader.RunAsync…");
-        var idMap = await loader.RunAsync(launch.JobId, plan, ct).ConfigureAwait(false);
+        DataLoader.IdMap idMap;
+        try
+        {
+            idMap = await loader.RunAsync(launch.JobId, plan, binaryReader, ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            binaryReader?.Dispose();
+        }
 
         Report(70, "Rows loaded. Advancing to ResolvingLookups…");
         OrchLog("phase", $"Pass 1 complete. IdMap has {idMap.Count} table(s). Setting status \u2192 7.");

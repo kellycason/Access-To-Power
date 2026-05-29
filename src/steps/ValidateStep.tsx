@@ -223,8 +223,11 @@ export function ValidateStep({ migrationJobId, report, plan, onBack, onRestart }
                       <TD colSpan={6} className="bg-amber-50/30 !border-t-0">
                         <div className="text-xs space-y-2 py-1">
                           {t.message && (
-                            <div className="text-rose-700">
-                              <span className="font-semibold">Error:</span> {t.message}
+                            <div className={t.status === "error" ? "text-rose-700" : "text-ink-700"}>
+                              <span className="font-semibold">
+                                {t.status === "error" ? "Error:" : "Note:"}
+                              </span>{" "}
+                              {t.message}
                             </div>
                           )}
                           {t.droppedColumns.length > 0 && (
