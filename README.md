@@ -178,3 +178,5 @@ Regenerate any sample with the matching `samples/create-*-accdb.ps1` script and 
 ## License
 
 [MIT](LICENSE) — use, fork, modify, and distribute freely, including commercially. No warranty.
+
+Built by Kelly Cason. If this tool saved you time, a ⭐ on the repo or a mention in your docs is appreciated.
