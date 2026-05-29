@@ -15,7 +15,7 @@ a remediation report for anything that can't move automatically.
 | --- | --- |
 | 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · or [printable PDF](https://github.com/kellycason/Access-To-Power/releases/latest/download/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
-| 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.0-unmanaged.zip) — import via Power Apps → Solutions → Import. |
+| 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-unmanaged.zip) — import via Power Apps → Solutions → Import. |
 | 🚀 **Deploy the Code App** (required) | clone this repo → `npm install` → `npm run power:push` (see [INSTALL.md](INSTALL.md)) |
 
 > **Why isn't the Code App in the solution zip?** Power Apps Code Apps are in preview and [don't yet support solution packaging](https://learn.microsoft.com/power-apps/developer/code-apps/how-to/alm#limitations). Until Microsoft ships GA solution support, the Code App **must** be deployed by running `npm run power:push` from this repo. The solution zip above only contains the `acp_*` Dataverse tables.
@@ -174,3 +174,7 @@ runs:
 - `edge-cases.accdb` — high-precision lat/long doubles, decimal precision, multiline/long memo text, lookup-wizard metadata, and unsupported binary-style fields.
 
 Regenerate any sample with the matching `samples/create-*-accdb.ps1` script and `-Force`.
+
+## License
+
+[MIT](LICENSE) — use, fork, modify, and distribute freely, including commercially. No warranty.
