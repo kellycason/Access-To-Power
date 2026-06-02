@@ -38,7 +38,7 @@ if ($sol.value.Count -gt 0) {
         uniquename                = "AccessToPower"
         friendlyname              = "Access to Power"
         description               = "Migration tool for Microsoft Access databases to Dataverse"
-        version                   = "0.1.0.0"
+        version                   = "0.1.2.0"
         "publisherid@odata.bind"  = "/publishers($pubId)"
     } | ConvertTo-Json
     $newSol = Invoke-RestMethod -Uri "$envUrl/api/data/v9.2/solutions" -Method Post -Headers $hd -Body $solBody

@@ -15,7 +15,7 @@ a remediation report for anything that can't move automatically.
 | --- | --- |
 | 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · [PDF](docs/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
-| 🧩 **Power Platform solution (`acp_*` tables + Code App)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-unmanaged.zip) — import from the Power Apps maker portal → environment selector → Solutions → Import solution, then open **Apps** and click **Play** on **Access to Power**. |
+| 🧩 **Power Platform solution (`acp_*` tables + Code App)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.2-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.2-unmanaged.zip) — import from the Power Apps maker portal → environment selector → Solutions → Import solution, then open **Apps** and click **Play** on **Access to Power**. |
 
 > The solution zip includes the Dataverse tables and the Access to Power Code App. No separate Code App deployment is required for normal installation.
 

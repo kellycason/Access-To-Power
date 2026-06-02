@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.1.1) — overrides tag-derived value'
+        description: 'Version (e.g. 0.1.2) — overrides tag-derived value'
         required: false
         type: string
 
