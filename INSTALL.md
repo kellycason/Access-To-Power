@@ -21,8 +21,8 @@ Tick these off first. If anything's missing, grab it before going further.
 
 - [ ] A **Power Apps Premium** license (the app uses Code Apps, which is a premium feature).
 - [ ] A **Dataverse environment** you can create tables in. If you're not sure, ask your
-      Power Platform admin: *"Can you give me a Dataverse environment where I'm a System
-      Customizer or System Administrator?"*
+   Power Platform admin: *"Can you give me a Dataverse environment where I'm a System
+   Customizer or System Administrator?"*
 - [ ] A **Windows PC** (Windows 10 or Windows 11). The helper does not run on Mac or Linux.
 - [ ] The **64-bit Microsoft Access Database Engine**. This is a free download from
       Microsoft. Without it the helper can't read `.accdb` files.
@@ -46,23 +46,24 @@ Tick these off first. If anything's missing, grab it before going further.
 This creates the **Access to Power** Dataverse tables in your Power Platform environment.
 The Code App itself is deployed in the next part.
 
-## Step 1 — Open the Power Platform Admin Center
+## Step 1 — Open the Power Apps maker portal
 
 1. Open your web browser.
-2. Go to 👉 **https://admin.powerplatform.microsoft.com**
+2. Go to the right maker portal for your tenant:
+   - Commercial: **https://make.powerapps.com/**
+   - GCC: **https://apps.gov.powerapps.us/**
 3. Sign in with your work account.
 
 ## Step 2 — Pick your environment
 
-1. On the left side, click **Environments**.
-2. Click the **name** of the environment you want to install the app into.
+1. Use the **environment selector in the top-right** of the maker portal.
+2. Pick the environment where you want to install Access to Power.
    (If you only see one, that's the one.)
 
 ## Step 3 — Import the solution
 
-1. Near the top of the page, click **Resources** ▸ **Solutions**.
-   *(Or click the **Solutions** tile on the environment overview.)*
-2. Click the **Import solution** button at the top.
+1. In the left-hand menu, click **Solutions**.
+2. At the top of the Solutions page, click **Import solution**.
 3. Click **Browse** and pick the file:
    **`AccessToPower_x_x_x_managed.zip`** (the one you got from your admin).
 4. Click **Next**.
@@ -96,7 +97,7 @@ npm install
 Open `power.config.json` and set:
 
 - `region` to your Power Platform region, such as `unitedstates`, `gccmoderate`, or `europe`.
-- `environmentId` to the Environment ID from Power Platform Admin Center.
+- `environmentId` to the Environment ID for the maker portal environment you selected.
 
 If `appId` is already filled in from another environment, leave it alone for now; the first
 `power:init` in your environment can register or update the app binding.
@@ -234,8 +235,9 @@ If you want to verify, look in **Settings ▸ Apps ▸ Installed apps** and sear
 **The helper:** Open **Settings ▸ Apps ▸ Installed apps**, find **Access-To-Power Helper**,
 click the three dots, click **Uninstall**.
 
-**The app:** In the Power Platform admin center, go to your environment ▸ **Solutions**,
-find **Access to Power**, click the three dots, click **Delete**.
+**The app:** In the Power Apps maker portal, select the environment in the top-right,
+open **Solutions** from the left-hand menu, find **Access to Power**, click the three dots,
+then click **Delete**.
 
 ---
 

@@ -68,7 +68,6 @@ The existing **Access-To-Power** workspace must remain fully functional and unto
   - `helper/Protocol/LaunchArgs.cs`
   - `src/services/` launcher
   - `INSTALL.md`
-  - `docs/install.html`
 - [ ] Vite `base` / output filenames — leave alone unless they collide
 - [ ] VS Code workspace file (if any) → new name
 
