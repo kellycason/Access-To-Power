@@ -15,10 +15,9 @@ a remediation report for anything that can't move automatically.
 | --- | --- |
 | 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · [PDF](docs/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
-| 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-unmanaged.zip) — import from the Power Apps maker portal → environment selector → Solutions → Import solution. |
-| 🚀 **Deploy the Code App** (required) | clone this repo → `npm install` → `npm run power:push` (see [INSTALL.md](INSTALL.md)) |
+| 🧩 **Power Platform solution (`acp_*` tables + Code App)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-unmanaged.zip) — import from the Power Apps maker portal → environment selector → Solutions → Import solution, then open **Apps** and click **Play** on **Access to Power**. |
 
-> **Why isn't the Code App in the solution zip?** Power Apps Code Apps are in preview and [don't yet support solution packaging](https://learn.microsoft.com/power-apps/developer/code-apps/how-to/alm#limitations). Until Microsoft ships GA solution support, the Code App **must** be deployed by running `npm run power:push` from this repo. The solution zip above only contains the `acp_*` Dataverse tables.
+> The solution zip includes the Dataverse tables and the Access to Power Code App. No separate Code App deployment is required for normal installation.
 
 You need: a Windows PC, a Power Apps Premium license, and a Dataverse environment where you're a System Customizer.
 
@@ -117,10 +116,13 @@ the full attribute list and the four cloud flows that act on these tables.
 - **Power Apps Code Apps** / **Enable code apps** turned on for the target environment by a Power Platform admin
 - **64-bit Microsoft Access Database Engine** on the workstation running
   the local helper
+
+## Developer workflow
+
+Normal installation does not require cloning this repo or running these commands. Use this workflow only when developing or testing changes to the Code App source.
+
 - Node 20+, npm 10+
 - `@microsoft/power-apps` CLI (installed as a dependency)
-
-## Getting started
 
 ```powershell
 npm install
@@ -151,8 +153,8 @@ npm run helper:package
 
 This creates `artifacts/AccessToPowerHelper-<version>-win-x64.zip`. Host that
 zip in a trusted software distribution location such as Intune, an internal
-software portal, Azure Blob Storage, or a release feed. Before building/pushing
-the Code App, set:
+software portal, Azure Blob Storage, or a release feed. For development builds,
+set:
 
 ```powershell
 $env:VITE_HELPER_INSTALLER_URL = "https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPowerHelper-0.1.2-win-x64.zip"
