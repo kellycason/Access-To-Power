@@ -115,7 +115,7 @@ async function executeHostPlugin<T>(pluginName: string, pluginAction: string, pa
   const bridge = await hostBridgePromise;
   let timeoutId = 0;
   const timeout = new Promise<never>((_, reject) => {
-    timeoutId = window.setTimeout(() => reject(new Error("Timed out waiting for Power Apps host metadata.")), 5000);
+    timeoutId = window.setTimeout(() => reject(new Error("Timed out waiting for Power Apps host metadata.")), 15000);
   });
   try {
     return await Promise.race([bridge.executePluginAsync<T>(pluginName, pluginAction, params), timeout]);
@@ -318,6 +318,11 @@ function extractDataverseOrigin(runtimeUrl: string | undefined): string | undefi
 }
 
 async function resolveRuntimeDataverseUrl(): Promise<string | undefined> {
+  await Promise.allSettled([
+    executeHostPlugin("AppPowerAppsClientPlugin", "loadNonCompositeConnectionsAsync"),
+    executeHostPlugin("AppPowerAppsClientPlugin", "resolveCompositeConnectionsAsync"),
+  ]);
+
   const configs = await executeHostPlugin<Record<string, CdsDataSourceConfig>>(
     "AppPowerAppsClientPlugin",
     "getAppCdsDataSourceConfigsAsync",
@@ -398,7 +403,7 @@ export class PowerAppsSdkDataverseClient implements DataverseClient {
   async getContext() {
     const context = await getPowerAppsContext().catch(() => null);
     const runtimeEnvUrl = await resolveRuntimeDataverseUrl();
-    const environmentUrl = runtimeEnvUrl ?? this.envUrl;
+    const environmentUrl = runtimeEnvUrl ?? (import.meta.env.DEV ? this.envUrl : "");
     const tenantId =
       context?.user.tenantId ??
       this.tenantId ??
@@ -406,7 +411,7 @@ export class PowerAppsSdkDataverseClient implements DataverseClient {
 
     if (!environmentUrl) {
       throw new Error(
-        "Dataverse environment URL is not available from the Power Apps host. Reopen the app from Power Apps and try again.",
+        "The current Dataverse environment URL was not available from the Power Apps host. Reopen Access to Power from the target environment's Apps page and try again.",
       );
     }
     if (!tenantId) {
