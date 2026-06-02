@@ -31,6 +31,7 @@
     <!-- MSAL with Windows broker (WAM) for secure interactive auth -->
     <PackageReference Include="Microsoft.Identity.Client" Version="4.66.2" />
     <PackageReference Include="Microsoft.Identity.Client.Broker" Version="4.66.2" />
+    <PackageReference Include="Microsoft.Identity.Client.Extensions.Msal" Version="4.66.2" />
   </ItemGroup>
 
 </Project>

@@ -1,5 +1,7 @@
 using Microsoft.Identity.Client;
+using Microsoft.Identity.Client.Extensions.Msal;
 using System.Diagnostics;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 
@@ -7,7 +9,7 @@ namespace AccessToPower.Helper.Services;
 
 /// <summary>
 /// MSAL-based interactive auth using the system browser.
-/// - Tokens never touch disk; the helper does not configure a persistent cache.
+/// - Uses MSAL's per-user token cache so later helper launches can sign in silently.
 /// - Public client (no secret).
 /// - Targets the user's Dataverse environment only (no broad consent).
 /// - Local-dev fallback: Azure CLI token pinned to the launch tenant.
@@ -17,6 +19,7 @@ public sealed class AuthService
     // Microsoft-published public client ID for Power Platform tooling.
     // This is the same well-known client ID pac CLI uses.
     private const string PublicClientId = "51f81489-12ee-4a9e-aaae-a2591f45987d";
+    private const string CacheFileName = "AccessToPowerHelper.msalcache";
 
     private readonly string _environmentUrl;
     private readonly string _tenantId;
@@ -48,9 +51,10 @@ public sealed class AuthService
             .WithRedirectUri("http://localhost")
             .Build();
 
+        await RegisterPersistentCacheAsync(app.UserTokenCache).ConfigureAwait(false);
+
         var accounts = await app.GetAccountsAsync().ConfigureAwait(false);
-        var account = accounts.FirstOrDefault();
-        if (account is not null)
+        foreach (var account in accounts)
         {
             try
             {
@@ -77,6 +81,19 @@ public sealed class AuthService
         {
             return await GetAzureCliTokenAsync(interactiveError, tenantForFallback, ct).ConfigureAwait(false);
         }
+    }
+
+    private static async Task RegisterPersistentCacheAsync(ITokenCache tokenCache)
+    {
+        var cacheDirectory = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AccessToPower",
+            "Auth");
+        Directory.CreateDirectory(cacheDirectory);
+
+        var storageProperties = new StorageCreationPropertiesBuilder(CacheFileName, cacheDirectory).Build();
+        var cacheHelper = await MsalCacheHelper.CreateAsync(storageProperties).ConfigureAwait(false);
+        cacheHelper.RegisterCache(tokenCache);
     }
 
     private static async Task<string> ResolveAuthorityAsync(string environmentUrl, string fallbackTenantId, CancellationToken ct)
