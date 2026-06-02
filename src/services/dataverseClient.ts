@@ -22,6 +22,108 @@ import type { AccessSchemaManifest, MigrationPlan } from "../types/manifest";
 import type { SchemaSnapshot } from "./existingDataverse";
 import { apiBase } from "./apiBase";
 
+type HostPluginBridge = {
+  initialize(): Promise<void>;
+  executePluginAsync<T = unknown>(pluginName: string, pluginAction: string, params?: unknown[]): Promise<T>;
+};
+
+type HostWindow = Window & { powerAppsBridge?: HostPluginBridge };
+
+let hostBridgePromise: Promise<HostPluginBridge> | undefined;
+
+class LocalPowerAppsBridge implements HostPluginBridge {
+  private antiCSRFToken: string | undefined;
+  private readonly callbacks: Record<string, { resolve: (value: unknown) => void; reject: (reason?: unknown) => void }> = {};
+  private callbackId = 0;
+  private readonly instanceId = Date.now().toString();
+  private readonly messageChannel = new MessageChannel();
+  private readonly queue: Array<Record<string, unknown>> = [];
+  private postMessageSource: MessagePort | undefined;
+
+  async initialize(): Promise<void> {
+    this.messageChannel.port1.onmessage = this.handleMessageEvent;
+    window.parent.postMessage(
+      { messageType: "initCommunicationWithPort", instanceId: this.instanceId },
+      "*",
+      [this.messageChannel.port2],
+    );
+  }
+
+  async executePluginAsync<T = unknown>(pluginName: string, pluginAction: string, params: unknown[] = []): Promise<T> {
+    return new Promise<T>((resolve, reject) => {
+      const callbackId = `instanceId=${this.instanceId}_${pluginName}${this.callbackId++}`;
+      this.callbacks[callbackId] = {
+        resolve: (value) => resolve(value as T),
+        reject,
+      };
+      this.sendMessage({
+        isPluginCall: true,
+        callbackId,
+        service: pluginName,
+        action: pluginAction,
+        actionArgs: params,
+        antiCSRFToken: this.antiCSRFToken,
+      });
+    });
+  }
+
+  private sendMessage(message: Record<string, unknown>): void {
+    if (!this.postMessageSource) {
+      this.queue.push(message);
+      return;
+    }
+    this.postMessageSource.postMessage(message);
+  }
+
+  private readonly handleMessageEvent = (messageEvent: MessageEvent): void => {
+    const message = messageEvent.data as Record<string, unknown> | undefined;
+    if (message && typeof message.isPluginCall === "boolean" && message.isPluginCall) {
+      const callbackId = typeof message.callbackId === "string" ? message.callbackId : "";
+      const callback = this.callbacks[callbackId];
+      if (!callback) return;
+
+      if (message.status === 1) {
+        const args = Array.isArray(message.args) ? message.args : [];
+        callback.resolve(args[0]);
+      } else if (message.status !== 0) {
+        callback.reject(message.args);
+      }
+
+      if (!message.keepCallback) {
+        delete this.callbacks[callbackId];
+      }
+      return;
+    }
+
+    if (message?.messageType === "initCommunication") {
+      this.antiCSRFToken = typeof message.antiCSRFToken === "string" ? message.antiCSRFToken : undefined;
+      this.postMessageSource = this.messageChannel.port1;
+      for (const queued of this.queue.splice(0)) {
+        queued.antiCSRFToken = this.antiCSRFToken;
+        this.postMessageSource.postMessage(queued);
+      }
+    }
+  };
+}
+
+async function executeHostPlugin<T>(pluginName: string, pluginAction: string, params: unknown[] = []): Promise<T> {
+  hostBridgePromise ??= (async () => {
+    const bridge = (window as HostWindow).powerAppsBridge ?? new LocalPowerAppsBridge();
+    await bridge.initialize();
+    return bridge;
+  })();
+  const bridge = await hostBridgePromise;
+  let timeoutId = 0;
+  const timeout = new Promise<never>((_, reject) => {
+    timeoutId = window.setTimeout(() => reject(new Error("Timed out waiting for Power Apps host metadata.")), 5000);
+  });
+  try {
+    return await Promise.race([bridge.executePluginAsync<T>(pluginName, pluginAction, params), timeout]);
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
+}
+
 export interface CreateJobInput {
   name: string;
   /** Optional: target solution unique name (defaults to a generated one). */
@@ -199,6 +301,36 @@ const dataSourcesInfo: Record<string, PowerAppsDataSourceEntry> = {
 };
 const powerAppsDataClient = getClient(dataSourcesInfo);
 
+type CdsDataSourceConfig = {
+  runtimeUrl?: string;
+  entitySetName?: string;
+  logicalName?: string;
+};
+
+function extractDataverseOrigin(runtimeUrl: string | undefined): string | undefined {
+  if (!runtimeUrl) return undefined;
+  try {
+    return new URL(runtimeUrl).origin.replace(/\/+$/, "");
+  } catch {
+    const match = runtimeUrl.match(/^(https?:\/\/[^/]+)/i);
+    return match?.[1]?.replace(/\/+$/, "");
+  }
+}
+
+async function resolveRuntimeDataverseUrl(): Promise<string | undefined> {
+  const configs = await executeHostPlugin<Record<string, CdsDataSourceConfig>>(
+    "AppPowerAppsClientPlugin",
+    "getAppCdsDataSourceConfigsAsync",
+  ).catch(() => undefined);
+  if (!configs) return undefined;
+
+  const entries = Object.values(configs);
+  const primary = entries.find(
+    (entry) => entry.entitySetName === ACCESS_TOPOWER_JOB_SET || entry.logicalName === "acp_migrationjob",
+  );
+  return extractDataverseOrigin(primary?.runtimeUrl) ?? extractDataverseOrigin(entries.find((entry) => entry.runtimeUrl)?.runtimeUrl);
+}
+
 /**
  * Registers a Dataverse table with the SDK runtime so it can be used as a
  * `tableName` in `executeAsync`/CRUD calls. Safe to call multiple times.
@@ -265,14 +397,16 @@ export class PowerAppsSdkDataverseClient implements DataverseClient {
 
   async getContext() {
     const context = await getPowerAppsContext().catch(() => null);
+    const runtimeEnvUrl = await resolveRuntimeDataverseUrl();
+    const environmentUrl = runtimeEnvUrl ?? this.envUrl;
     const tenantId =
       context?.user.tenantId ??
       this.tenantId ??
       (import.meta.env.VITE_TENANT_ID as string | undefined);
 
-    if (!this.envUrl) {
+    if (!environmentUrl) {
       throw new Error(
-        "Dataverse environment URL is not configured. Set VITE_DATAVERSE_URL before building the Code App.",
+        "Dataverse environment URL is not available from the Power Apps host. Reopen the app from Power Apps and try again.",
       );
     }
     if (!tenantId) {
@@ -281,7 +415,7 @@ export class PowerAppsSdkDataverseClient implements DataverseClient {
       );
     }
 
-    return { environmentUrl: this.envUrl, tenantId };
+    return { environmentUrl, tenantId };
   }
 
   async createMigrationJob(input: CreateJobInput): Promise<{ migrationJobId: string }> {

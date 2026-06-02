@@ -154,8 +154,8 @@ software portal, Azure Blob Storage, or a release feed. Before building/pushing
 the Code App, set:
 
 ```powershell
-$env:VITE_HELPER_INSTALLER_URL = "https://contoso.example/downloads/AccessToPowerHelper-0.1.0-win-x64.zip"
-$env:VITE_HELPER_INSTALLER_VERSION = "0.1.0"
+$env:VITE_HELPER_INSTALLER_URL = "https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPowerHelper-0.1.2-win-x64.zip"
+$env:VITE_HELPER_INSTALLER_VERSION = "0.1.2"
 ```
 
 The app will show this download link on the first step and in helper-launch

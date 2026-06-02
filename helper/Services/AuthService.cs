@@ -8,8 +8,7 @@ namespace AccessToPower.Helper.Services;
 /// - Tokens never touch disk; the helper does not configure a persistent cache.
 /// - Public client (no secret).
 /// - Targets the user's Dataverse environment only (no broad consent).
-/// - Local-dev fallback: Azure CLI token, useful when national-cloud browser
-///   profile routing blocks MSAL during pilot testing.
+/// - Local-dev fallback: Azure CLI token pinned to the launch tenant.
 /// </summary>
 public sealed class AuthService
 {
@@ -31,14 +30,15 @@ public sealed class AuthService
 
         _app = PublicClientApplicationBuilder
             .Create(PublicClientId)
-            .WithAuthority($"https://login.microsoftonline.us/{tenantId}") // GCC authority
+            .WithAuthority(BuildAuthority(_environmentUrl, tenantId))
             .WithRedirectUri("http://localhost")
             .Build();
     }
 
     /// <summary>
     /// Acquire an access token for the Dataverse environment. Tries silent first,
-    /// then Azure CLI (local-dev convenience for the pilot test loop).
+    /// then prompts the user to pick the intended account. Azure CLI is only a
+    /// tenant-pinned local-dev fallback after interactive sign-in fails.
     /// </summary>
     public async Task<string> GetTokenAsync(CancellationToken ct)
     {
@@ -61,15 +61,37 @@ public sealed class AuthService
             catch (MsalClientException) { /* broker hiccup — fall through */ }
         }
 
-        return await GetAzureCliTokenAsync(ct).ConfigureAwait(false);
+        try
+        {
+            var interactive = await _app
+                .AcquireTokenInteractive(scopes)
+                .WithPrompt(Prompt.SelectAccount)
+                .ExecuteAsync(ct)
+                .ConfigureAwait(false);
+            return interactive.AccessToken;
+        }
+        catch (MsalException interactiveError)
+        {
+            return await GetAzureCliTokenAsync(interactiveError, ct).ConfigureAwait(false);
+        }
     }
 
-    private async Task<string> GetAzureCliTokenAsync(CancellationToken ct)
+    private static string BuildAuthority(string environmentUrl, string tenantId)
+    {
+        var host = new Uri(environmentUrl).Host;
+        var loginHost = host.EndsWith(".dynamics.us", StringComparison.OrdinalIgnoreCase) ||
+            host.EndsWith(".appsplatform.us", StringComparison.OrdinalIgnoreCase)
+                ? "https://login.microsoftonline.us"
+                : "https://login.microsoftonline.com";
+        return $"{loginHost}/{tenantId}";
+    }
+
+    private async Task<string> GetAzureCliTokenAsync(Exception interactiveError, CancellationToken ct)
     {
         var psi = new ProcessStartInfo
         {
             FileName = "cmd.exe",
-            Arguments = $"/d /c az account get-access-token --resource \"{_environmentUrl}\" --query accessToken -o tsv",
+            Arguments = $"/d /c az account get-access-token --tenant \"{_tenantId}\" --resource \"{_environmentUrl}\" --query accessToken -o tsv",
             RedirectStandardOutput = true,
             RedirectStandardError = true,
             UseShellExecute = false,
@@ -87,8 +109,8 @@ public sealed class AuthService
         if (p.ExitCode != 0 || string.IsNullOrWhiteSpace(stdout))
         {
             throw new InvalidOperationException(
-                "MSAL sign-in failed and Azure CLI token fallback also failed. Run `az login --tenant " +
-                $"{_tenantId}` and retry. Azure CLI said: {stderr}");
+                "Browser sign-in failed and Azure CLI token fallback also failed. Sign in with the same account you use for Power Apps, " +
+                $"or run `az login --tenant {_tenantId}` and retry. Browser sign-in said: {interactiveError.Message}. Azure CLI said: {stderr}");
         }
         return stdout;
     }

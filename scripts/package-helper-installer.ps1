@@ -8,7 +8,7 @@
 param(
     [string]$Configuration = "Release",
     [string]$Runtime = "win-x64",
-    [string]$Version = "0.1.0",
+    [string]$Version = "0.1.2",
     [string]$OutputDir,
     [switch]$FrameworkDependent,
     [switch]$KeepStaging
@@ -38,7 +38,7 @@ $fileVersion = if ($Version -match '^\d+\.\d+\.\d+\.\d+$') {
 } elseif ($Version -match '^\d+\.\d+\.\d+$') {
     "$Version.0"
 } else {
-    "0.1.0.0"
+    "0.1.2.0"
 }
 
 if (Test-Path $stageRoot) { Remove-Item $stageRoot -Recurse -Force }

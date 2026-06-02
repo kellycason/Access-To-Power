@@ -29,7 +29,7 @@ Tick these off first. If anything's missing, grab it before going further.
       grab the **`AccessDatabaseEngine_X64.exe`** version.
 - [ ] The **Access to Power solution file** (`AccessToPower_x_x_x_managed.zip`) — your
       admin or whoever sent you here should have given you this file.
-- [ ] The **helper installer zip** (`AccessToPowerHelper-0.1.0-win-x64.zip`). Download the
+- [ ] The **helper installer zip** (`AccessToPowerHelper-0.1.2-win-x64.zip`). Download the
       latest one from the project's GitHub Releases page:
       👉 **https://github.com/kellycason/Access-To-Power/releases/latest**
 
@@ -106,7 +106,7 @@ it opens your Access file and uploads what's inside.
 
 ## Step 2 — Unzip the helper
 
-1. Download **`AccessToPowerHelper-0.1.0-win-x64.zip`** from
+1. Download **`AccessToPowerHelper-0.1.2-win-x64.zip`** from
    **https://github.com/kellycason/Access-To-Power/releases/latest**
    *(or use the copy your admin sent you).*
 2. **Right-click** the zip file.
