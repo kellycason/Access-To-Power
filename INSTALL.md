@@ -3,10 +3,11 @@
 Welcome! This guide walks you through getting **Access to Power** up and running.
 You'll do this **once**, then you can migrate as many Access databases as you want.
 
-There are **two things** to install:
+There are **three things** to install:
 
-1. 🟦 **The app** — lives in Power Platform (the cloud). Everyone who uses the app shares this.
-2. 🟧 **The helper** — a tiny program that lives on **your own Windows PC**. It reads the
+1. 🟦 **The Dataverse solution** — creates the migration tables in Power Platform.
+2. 🟦 **The Code App** — the browser app you use to run migrations.
+3. 🟧 **The helper** — a tiny program that lives on **your own Windows PC**. It reads the
    Access file off your hard drive (because a web browser can't).
 
 > ⏱️ **Total time:** about 15 minutes.
@@ -32,6 +33,7 @@ Tick these off first. If anything's missing, grab it before going further.
 - [ ] The **helper installer zip** (`AccessToPowerHelper-0.1.2-win-x64.zip`). Download the
       latest one from the project's GitHub Releases page:
       👉 **https://github.com/kellycason/Access-To-Power/releases/latest**
+- [ ] **Node.js 20 or newer** and **Git** on the machine you will use to deploy the Code App.
 
 > ❓ **What's a Dataverse environment?** Think of it like a database in the cloud where
 > Power Apps stores its stuff. Your company probably already has one (or several). You
@@ -39,10 +41,10 @@ Tick these off first. If anything's missing, grab it before going further.
 
 ---
 
-# 🟦 Part 1 — Install the app (the cloud part)
+# 🟦 Part 1 — Import the Dataverse solution
 
-This puts the **Access to Power** app into your Power Platform environment so you (and
-anyone else in your org) can open it from the browser.
+This creates the **Access to Power** Dataverse tables in your Power Platform environment.
+The Code App itself is deployed in the next part.
 
 ## Step 1 — Open the Power Platform Admin Center
 
@@ -72,20 +74,60 @@ anyone else in your org) can open it from the browser.
 > ✅ **You'll know it worked when** you see "Access to Power" in your solutions list with
 > a green "Managed" tag.
 
-## Step 4 — Open the app once to set it up
+---
 
-1. Still in the admin center, click on the **Access to Power** solution you just imported.
-2. Find the item called **Access to Power** with type **Code App** (it has a little
-   `</>` icon).
-3. Click it. A new tab opens with the app.
-4. **First time only:** the browser will ask permission to use your Microsoft account.
-   Click **Allow**.
+# 🟦 Part 2 — Deploy the Code App
 
-> 🎉 **The app is installed!** Now we need the helper.
+Power Apps Code Apps are currently in preview and are not packaged inside the solution zip.
+You deploy the Code App from this GitHub repo after the solution import succeeds.
+
+## Step 1 — Clone the repo
+
+Open PowerShell in the folder where you keep source code, then run:
+
+```powershell
+git clone https://github.com/kellycason/Access-To-Power.git
+cd Access-To-Power
+npm install
+```
+
+## Step 2 — Point the Code App at your environment
+
+Open `power.config.json` and set:
+
+- `region` to your Power Platform region, such as `unitedstates`, `gccmoderate`, or `europe`.
+- `environmentId` to the Environment ID from Power Platform Admin Center.
+
+If `appId` is already filled in from another environment, leave it alone for now; the first
+`power:init` in your environment can register or update the app binding.
+
+## Step 3 — Configure the helper download shown in the app
+
+Run these in the same PowerShell window:
+
+```powershell
+$env:VITE_HELPER_INSTALLER_URL = "https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPowerHelper-0.1.2-win-x64.zip"
+$env:VITE_HELPER_INSTALLER_VERSION = "0.1.2"
+```
+
+## Step 4 — Push the Code App
+
+Run:
+
+```powershell
+npm run power:init
+npm run power:push
+```
+
+Sign in if the Power Apps CLI asks. When the push finishes, open the app from Power Apps
+or from the URL printed by the CLI.
+
+> 🎉 **The cloud app is installed!** Now install the helper on the workstation that has
+> the Access database.
 
 ---
 
-# 🟧 Part 2 — Install the helper (the PC part)
+# 🟧 Part 3 — Install the helper (the PC part)
 
 The helper is a small Windows program. It does **one** thing: when the app asks it to,
 it opens your Access file and uploads what's inside.
@@ -162,13 +204,12 @@ If you want to verify, look in **Settings ▸ Apps ▸ Installed apps** and sear
 
 # ✅ Try it out
 
-1. Go back to the Power Platform admin center.
-2. Open the **Access to Power** app (same way as Step 4 in Part 1).
-3. Click **New Migration**.
-4. When the app asks you to pick your `.accdb` file, your browser may show a popup
+1. Open the **Access to Power** Code App.
+2. Click **New Migration**.
+3. When the app asks you to pick your `.accdb` file, your browser may show a popup
    asking *"Open AccessToPowerHelper?"* — click **Open** (and tick "Always allow…" if
    you don't want to be asked again).
-5. The helper opens, you sign in once with your work account, and pick your `.accdb`.
+4. The helper opens, prompts you to sign in with your work account, and lets you pick your `.accdb`.
 
 🎊 **You're done!** Follow the wizard from there.
 
@@ -178,11 +219,12 @@ If you want to verify, look in **Settings ▸ Apps ▸ Installed apps** and sear
 
 | What you see | What to do |
 | --- | --- |
-| **"This page can't be displayed"** when you click an `accesstopower://` link | The helper isn't installed yet, or didn't register. Re-run **Part 2 ▸ Step 3**. |
+| **"This page can't be displayed"** when you click an `accesstopower://` link | The helper isn't installed yet, or didn't register. Re-run **Part 3 ▸ Step 3**. |
 | **"Solution import failed"** in Part 1 | Make sure you're a System Customizer or System Administrator on that environment. If you are, try once more — sometimes the platform is just busy. |
-| **Yellow "ACE OLEDB provider was not detected"** warning | Install the Microsoft Access Database Engine — see **Part 2 ▸ Step 1**. |
-| **"Cannot run scripts on this system"** when running the installer | You typed `install-helper.ps1` directly. Use the **full command** in **Part 2 ▸ Step 3** — it starts with `powershell.exe -ExecutionPolicy Bypass …`. |
-| **The helper opens but says "Sign-in failed"** | Make sure you're signing in with the **same account** you use for Power Apps. If you have multiple work accounts, the helper picks the one Windows knows about — sign out of the wrong one in Windows Settings ▸ Accounts. |
+| **`power:init` or `power:push` fails** | Make sure `power.config.json` has the right `region` and `environmentId`, then sign in with an account that can create Code Apps in that environment. |
+| **Yellow "ACE OLEDB provider was not detected"** warning | Install the Microsoft Access Database Engine — see **Part 3 ▸ Step 1**. |
+| **"Cannot run scripts on this system"** when running the installer | You typed `install-helper.ps1` directly. Use the **full command** in **Part 3 ▸ Step 3** — it starts with `powershell.exe -ExecutionPolicy Bypass …`. |
+| **The helper opens but says "Sign-in failed"** | Make sure you're signing in with the **same account** you use for Power Apps, and that account has access to the target environment. |
 | **The app doesn't see the helper when I click "Scan"** | Close the browser tab and reopen the app. Make sure you ran the installer (not just unzipped the folder). |
 
 ---
