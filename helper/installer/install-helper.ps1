@@ -5,7 +5,7 @@
 
 [CmdletBinding()]
 param(
-    [string]$SourceDir = $PSScriptRoot,
+    [string]$SourceDir,
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA "AccessToPower\Helper"),
     [switch]$SkipAceCheck
 )
@@ -59,6 +59,18 @@ function Set-UninstallEntry([string]$InstallPath, [string]$ExePath, [string]$Ver
     Set-ItemProperty -Path $uninstallKey -Name "UninstallString" -Value $uninstallCommand
     Set-ItemProperty -Path $uninstallKey -Name "NoModify" -Value 1 -Type DWord
     Set-ItemProperty -Path $uninstallKey -Name "NoRepair" -Value 1 -Type DWord
+}
+
+if (-not $SourceDir) {
+    $SourceDir = if ($PSScriptRoot) {
+        $PSScriptRoot
+    } elseif ($PSCommandPath) {
+        Split-Path -Parent $PSCommandPath
+    } elseif ($MyInvocation.MyCommand.Path) {
+        Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        (Get-Location).Path
+    }
 }
 
 $SourceDir = (Resolve-Path $SourceDir).Path

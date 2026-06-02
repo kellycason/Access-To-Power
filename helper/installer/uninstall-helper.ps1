@@ -2,10 +2,22 @@
 
 [CmdletBinding()]
 param(
-    [string]$InstallDir = $PSScriptRoot
+    [string]$InstallDir
 )
 
 $ErrorActionPreference = "Stop"
+
+if (-not $InstallDir) {
+    $InstallDir = if ($PSScriptRoot) {
+        $PSScriptRoot
+    } elseif ($PSCommandPath) {
+        Split-Path -Parent $PSCommandPath
+    } elseif ($MyInvocation.MyCommand.Path) {
+        Split-Path -Parent $MyInvocation.MyCommand.Path
+    } else {
+        (Get-Location).Path
+    }
+}
 
 $protocolKey = "HKCU:\Software\Classes\accesstopower"
 if (Test-Path $protocolKey) {
