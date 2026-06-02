@@ -114,6 +114,7 @@ the full attribute list and the four cloud flows that act on these tables.
 
 - **Power Apps Premium** license for end users (Code Apps requirement)
 - **Dataverse environment** with table creation permissions
+- **Power Apps Code Apps** / **Enable code apps** turned on for the target environment by a Power Platform admin
 - **64-bit Microsoft Access Database Engine** on the workstation running
   the local helper
 - Node 20+, npm 10+

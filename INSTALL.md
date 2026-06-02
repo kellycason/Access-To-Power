@@ -23,6 +23,10 @@ Tick these off first. If anything's missing, grab it before going further.
 - [ ] A **Dataverse environment** you can create tables in. If you're not sure, ask your
    Power Platform admin: *"Can you give me a Dataverse environment where I'm a System
    Customizer or System Administrator?"*
+- [ ] **Power Apps Code Apps enabled** for that environment. Ask your Power Platform admin
+   to turn on the Admin Center feature setting **Power Apps Code Apps** / **Enable code apps**:
+   "Allow users to bring apps they've created outside Power Apps and run them in Power Apps."
+   If this setting is off, Code Apps can be deployed but will not run.
 - [ ] A **Windows PC** (Windows 10 or Windows 11). The helper does not run on Mac or Linux.
 - [ ] The **64-bit Microsoft Access Database Engine**. This is a free download from
       Microsoft. Without it the helper can't read `.accdb` files.
@@ -222,6 +226,7 @@ If you want to verify, look in **Settings ▸ Apps ▸ Installed apps** and sear
 | --- | --- |
 | **"This page can't be displayed"** when you click an `accesstopower://` link | The helper isn't installed yet, or didn't register. Re-run **Part 3 ▸ Step 3**. |
 | **"Solution import failed"** in Part 1 | Make sure you're a System Customizer or System Administrator on that environment. If you are, try once more — sometimes the platform is just busy. |
+| **"This app isn't opening correctly"** and the page says the environment **does not allow this operation for this Code app** | The **Power Apps Code Apps** / **Enable code apps** feature setting is off for the environment. Ask your Power Platform admin to turn it on in the Power Platform Admin Center, then reopen the app. |
 | **`power:init` or `power:push` fails** | Make sure `power.config.json` has the right `region` and `environmentId`, then sign in with an account that can create Code Apps in that environment. |
 | **Yellow "ACE OLEDB provider was not detected"** warning | Install the Microsoft Access Database Engine — see **Part 3 ▸ Step 1**. |
 | **"Cannot run scripts on this system"** when running the installer | You typed `install-helper.ps1` directly. Use the **full command** in **Part 3 ▸ Step 3** — it starts with `powershell.exe -ExecutionPolicy Bypass …`. |
