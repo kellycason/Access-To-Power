@@ -151,10 +151,11 @@ Build the distributable helper zip:
 npm run helper:package
 ```
 
-This creates `artifacts/AccessToPowerHelper-<version>-win-x64.zip`. Host that
-zip in a trusted software distribution location such as Intune, an internal
-software portal, Azure Blob Storage, or a release feed. For development builds,
-set:
+This creates `artifacts/AccessToPowerHelper-<version>-win-x64.zip`. The public
+app defaults to the helper zip attached to the latest GitHub release. For private
+distribution, host the zip in a trusted software distribution location such as
+Intune, an internal software portal, Azure Blob Storage, or a release feed, then
+override the default during development builds:
 
 ```powershell
 $env:VITE_HELPER_INSTALLER_URL = "https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPowerHelper-0.1.2-win-x64.zip"

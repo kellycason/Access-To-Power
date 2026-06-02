@@ -12,7 +12,7 @@ export function HelperInstallPanel() {
       />
 
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-sm">
-        <InstallStep index="1" title="Download" detail="Get the signed helper package from your software portal." />
+        <InstallStep index="1" title="Download" detail="Get the helper package from the project release." />
         <InstallStep index="2" title="Install" detail="Run the installer script from the extracted package." />
         <InstallStep index="3" title="Launch" detail="The app opens the helper through accesstopower:// when you scan or migrate." />
       </div>
@@ -33,7 +33,7 @@ export function HelperInstallPanel() {
         </div>
       ) : (
         <Alert intent="warning" title="Installer URL not configured" className="mt-4">
-          Ask your admin to host the helper zip built by <code>scripts/package-helper-installer.ps1</code> and set <code>VITE_HELPER_INSTALLER_URL</code> before publishing this app.
+          Ask your admin to provide the helper zip from the Access-To-Power release.
         </Alert>
       )}
     </Card>
