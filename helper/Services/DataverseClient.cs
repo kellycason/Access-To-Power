@@ -566,16 +566,25 @@ public sealed class DataverseClient : IDisposable
         return obj["UserLocalizedLabel"]?["Label"]?.GetValue<string>() ?? string.Empty;
     }
 
-    private static async Task EnsureSuccessAsync(HttpResponseMessage resp, CancellationToken ct)
+    private async Task EnsureSuccessAsync(HttpResponseMessage resp, CancellationToken ct)
     {
         if (resp.IsSuccessStatusCode) return;
         var text = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         await EnsureSuccessAsync(resp, text).ConfigureAwait(false);
     }
 
-    private static Task EnsureSuccessAsync(HttpResponseMessage resp, string text)
+    private Task EnsureSuccessAsync(HttpResponseMessage resp, string text)
     {
         if (resp.IsSuccessStatusCode) return Task.CompletedTask;
+        if (resp.StatusCode == System.Net.HttpStatusCode.Forbidden &&
+            (text.Contains("0x80072560", StringComparison.OrdinalIgnoreCase) ||
+             text.Contains("not a member of the organization", StringComparison.OrdinalIgnoreCase)))
+        {
+            throw new HttpRequestException(
+                "Dataverse rejected the signed-in account for this environment. Close the helper, return to Access to Power, " +
+                "launch the scan again, and choose the same account that can open this Power Apps environment. " +
+                $"Target environment: {_envUrl}. Dataverse said: {Truncate(text, 800)}");
+        }
         throw new HttpRequestException(
             $"Dataverse {(int)resp.StatusCode} {resp.ReasonPhrase}: {Truncate(text, 800)}");
     }
