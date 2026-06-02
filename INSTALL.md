@@ -55,7 +55,7 @@ The Code App itself is deployed in the next part.
 1. Open your web browser.
 2. Go to the right maker portal for your tenant:
    - Commercial: **https://make.powerapps.com/**
-   - GCC: **https://apps.gov.powerapps.us/**
+   - GCC: **https://make.gov.powerapps.us/**
 3. Sign in with your work account.
 
 ## Step 2 — Pick your environment
