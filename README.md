@@ -13,7 +13,7 @@ a remediation report for anything that can't move automatically.
 
 | What | Where |
 | --- | --- |
-| 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) |
+| 📘 **Step-by-step install guide** | [INSTALL.md](INSTALL.md) · [PDF](docs/install.pdf) |
 | 💾 **Download the Windows helper** | [latest release](https://github.com/kellycason/Access-To-Power/releases/latest) → `AccessToPowerHelper-x.x.x-win-x64.zip` |
 | 🧩 **Dataverse solution (`acp_*` tables)** | [managed](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-managed.zip) · [unmanaged](https://github.com/kellycason/Access-To-Power/releases/latest/download/AccessToPower-0.1.1-unmanaged.zip) — import from the Power Apps maker portal → environment selector → Solutions → Import solution. |
 | 🚀 **Deploy the Code App** (required) | clone this repo → `npm install` → `npm run power:push` (see [INSTALL.md](INSTALL.md)) |
