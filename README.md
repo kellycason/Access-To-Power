@@ -4,8 +4,8 @@ A **Power Apps Code App** that migrates Microsoft Access databases (`.accdb`,
 `.mdb`) to **Microsoft Dataverse** — schema, relationships, and data — with
 a remediation report for anything that can't move automatically.
 
-> Migrates: **tables, columns, relationships, data**
-> Does **NOT** migrate: forms, reports, macros, VBA, queries, attachments, OLE objects
+> Migrates: **tables, columns, relationships, data, supported binary fields**
+> Does **NOT** convert Access UI/code objects as-is: forms, reports, macros, VBA, saved queries
 
 ## 🚀 Install / get started
 

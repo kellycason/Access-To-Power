@@ -199,9 +199,10 @@ export function ConnectStep({ jobName, onJobNameChange, onJobCreated }: Props) {
       </Card>
 
       <Alert intent="info" title="Before you start">
-        The local helper requires the 64-bit Microsoft Access Database Engine. Forms, reports,
-        macros, VBA, queries, attachments, and OLE objects are <strong>not</strong> migrated — only
-        tables, columns, relationships, and data.
+        The local helper requires the 64-bit Microsoft Access Database Engine. Access forms,
+        reports, macros, VBA, and saved queries are <strong>not</strong> converted as Access objects.
+        The migration moves tables, columns, relationships, data, and supported binary fields; after
+        migration, you can generate a Dataverse model-driven app with forms for the migrated tables.
       </Alert>
 
       <HelperInstallPanel />

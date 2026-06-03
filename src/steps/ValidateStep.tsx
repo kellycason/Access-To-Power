@@ -243,10 +243,11 @@ export function ValidateStep({ migrationJobId, report, plan, onBack, onRestart }
                                 ))}
                               </ul>
                               <div className="text-ink-500 mt-1">
-                                These columns exist in Access but their data type
-                                (Multi-value lookups, Attachments, OLE objects, Binary)
-                                isn't supported by this tool yet. The destination column
-                                was not created.
+                                These columns exist in Access but were skipped or could not be mapped
+                                automatically. Binary and attachment-style fields can be mapped to
+                                File, Image, or Note Attachment where supported; Access UI/code
+                                objects such as forms, reports, macros, VBA, and saved queries are
+                                not converted as Access objects.
                               </div>
                             </div>
                           )}
